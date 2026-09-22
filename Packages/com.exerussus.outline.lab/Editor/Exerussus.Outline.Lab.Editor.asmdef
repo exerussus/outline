@@ -1,0 +1,22 @@
+{
+    "name": "Exerussus.Outline.Lab.Editor",
+    "rootNamespace": "Exerussus.Outline.Lab.Editor",
+    "references": [
+        "Exerussus.Outline",
+        "Exerussus.Outline.Editor",
+        "Exerussus.Outline.Lab",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

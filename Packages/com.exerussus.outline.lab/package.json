@@ -1,0 +1,21 @@
+{
+  "name": "com.exerussus.outline.lab",
+  "version": "0.1.0",
+  "displayName": "Exerussus Outline Lab",
+  "description": "Площадка для com.exerussus.outline: сборщик тестовой сцены, пресеты стилей, демо-управление, HUD со статистикой, бенчмарк.",
+  "unity": "6000.6",
+  "dependencies": {
+    "com.exerussus.outline": "0.1.0",
+    "com.unity.inputsystem": "1.20.0",
+    "com.unity.render-pipelines.universal": "17.6.0"
+  },
+  "keywords": [
+    "outline",
+    "lab",
+    "benchmark"
+  ],
+  "author": {
+    "name": "exerussus"
+  },
+  "license": "MIT"
+}
