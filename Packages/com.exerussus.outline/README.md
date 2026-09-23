@@ -152,6 +152,7 @@ handle.FadeOutAndHide(0.2f);
 | `scissor` | вкл | Отсекать растеризацию этим прямоугольником. |
 | `occlusionBias` | 0.02 | Допуск сравнения с глубиной сцены, м. |
 | `transparentCutoff` | 0.1 | Порог альфы для прозрачных материалов в режиме `Auto`. |
+| `objectColor` | Simple | Чем рисуется сам объект в режиме прозрачности: упрощённое освещение по текстуре и цвету материала или исходный материал (точнее, но может не рисоваться с GPU Resident Drawer). |
 | `debugView` | None | Mask / Seeds / Distance. |
 | `renderInSceneView` | вкл | Рисовать в Scene View. |
 

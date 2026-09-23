@@ -66,7 +66,8 @@ namespace Exerussus.Outline.Rendering
         {
             Texture tex = null;
             var st = new Vector4(1f, 1f, 0f, 0f);
-            float alpha = 1f;
+            // полный цвет — для прохода цвета объекта (прозрачность); маске нужна только альфа
+            var color = Color.white;
             float cutoff = 0.5f;
             bool alphaTest = false;
             bool transparent = false;
@@ -77,9 +78,9 @@ namespace Exerussus.Outline.Rendering
                 else if (src.HasTexture(MainTexId)) ReadTexture(src, MainTexId, ref tex, ref st);
                 else if (src.HasTexture(GltfBaseTexId)) ReadTexture(src, GltfBaseTexId, ref tex, ref st);
 
-                if (src.HasColor(BaseColorId)) alpha = src.GetColor(BaseColorId).a;
-                else if (src.HasColor(ColorId)) alpha = src.GetColor(ColorId).a;
-                else if (src.HasColor(GltfBaseFactorId)) alpha = src.GetColor(GltfBaseFactorId).a;
+                if (src.HasColor(BaseColorId)) color = src.GetColor(BaseColorId);
+                else if (src.HasColor(ColorId)) color = src.GetColor(ColorId);
+                else if (src.HasColor(GltfBaseFactorId)) color = src.GetColor(GltfBaseFactorId);
 
                 if (src.HasFloat(CutoffId)) cutoff = src.GetFloat(CutoffId);
                 else if (src.HasFloat(GltfCutoffId)) cutoff = src.GetFloat(GltfCutoffId);
@@ -100,7 +101,8 @@ namespace Exerussus.Outline.Rendering
 
             dst.SetTexture(BaseMapId, tex != null ? tex : Texture2D.whiteTexture);
             dst.SetVector(BaseMapStId, st);
-            dst.SetColor(BaseColorId, new Color(1f, 1f, 1f, alpha));
+            // SetColor в линейном пространстве сам переводит sRGB-цвет материала, как у исходного шейдера
+            dst.SetColor(BaseColorId, color);
             dst.SetFloat(OutlineClipId, clip);
         }
 
