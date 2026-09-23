@@ -30,6 +30,13 @@ namespace Exerussus.Outline.Lab
         private OutlinePatternType _initialPattern;
         private OutlinePatternLayers _initialPatternLayers;
         private OutlineHandle _hoverHandle;
+        private OutlineEdgeAA _initialEdgeAA;
+        [SerializeField, Tooltip("Точка обзора второго ряда витрины (клавиша V).")]
+        private Transform effectsView;
+        private Vector3 _homePos;
+        private Quaternion _homeRot;
+        private bool _atEffects;
+        private OutlinePatternSpace _initialPatternSpace;
 
         private void Awake()
         {
@@ -45,10 +52,12 @@ namespace Exerussus.Outline.Lab
             {
                 _initialDebugView = feature.settings.debugView;
                 _initialCrop = feature.settings.cropToBounds;
+                _initialEdgeAA = feature.settings.edgeAntialiasing;
             }
             if (selectedStyle != null)
             {
                 _initialPattern = selectedStyle.pattern;
+                _initialPatternSpace = selectedStyle.patternSpace;
                 _initialPatternLayers = selectedStyle.patternLayers;
             }
         }
@@ -60,10 +69,12 @@ namespace Exerussus.Outline.Lab
             {
                 feature.settings.debugView = _initialDebugView;
                 feature.settings.cropToBounds = _initialCrop;
+                feature.settings.edgeAntialiasing = _initialEdgeAA;
             }
             if (selectedStyle != null)
             {
                 selectedStyle.pattern = _initialPattern;
+                selectedStyle.patternSpace = _initialPatternSpace;
                 selectedStyle.patternLayers = _initialPatternLayers;
             }
 
@@ -100,13 +111,27 @@ namespace Exerussus.Outline.Lab
                 if (keyboard.digit2Key.wasPressedThisFrame) feature.settings.debugView = OutlineDebugView.Seeds;
                 if (keyboard.digit3Key.wasPressedThisFrame) feature.settings.debugView = OutlineDebugView.Distance;
                 if (keyboard.cKey.wasPressedThisFrame) feature.settings.cropToBounds = !feature.settings.cropToBounds;
+                if (keyboard.vKey.wasPressedThisFrame)
+                    ToggleView();
+                if (keyboard.aKey.wasPressedThisFrame) feature.settings.edgeAntialiasing = NextEdgeAA(feature.settings.edgeAntialiasing);
             }
             if (selectedStyle != null && keyboard.pKey.wasPressedThisFrame)
             {
                 // перебор паттернов выделения (на время Play; при выходе вернётся исходный)
-                int next = ((int)selectedStyle.pattern + 1) % 8;
+                int next = ((int)selectedStyle.pattern + 1) % 9;
                 selectedStyle.pattern = (OutlinePatternType)next;
                 selectedStyle.patternLayers = OutlinePatternLayers.All;
+            }
+            if (selectedStyle != null && keyboard.oKey.wasPressedThisFrame)
+            {
+                // перебор пространства паттерна выделения: экран → объект → поверхность объекта → поверхность мира
+                selectedStyle.patternSpace = (OutlinePatternSpace)(((int)selectedStyle.patternSpace + 1) % 4);
+                if (selectedStyle.pattern == OutlinePatternType.None)
+                {
+                    selectedStyle.pattern = OutlinePatternType.Stripes;
+                    selectedStyle.patternLayers = OutlinePatternLayers.All;
+                }
+                Debug.Log($"[OutlineLabDemo] пространство паттерна: {selectedStyle.patternSpace}");
             }
         }
 
@@ -162,5 +187,31 @@ namespace Exerussus.Outline.Lab
                 _selected.Remove(_scratch[i]);
             _scratch.Clear();
         }
+
+        private void ToggleView()
+        {
+            if (effectsView == null || targetCamera == null)
+                return;
+            var tr = targetCamera.transform;
+            if (!_atEffects)
+            {
+                _homePos = tr.position;
+                _homeRot = tr.rotation;
+                tr.SetPositionAndRotation(effectsView.position, effectsView.rotation);
+            }
+            else
+            {
+                tr.SetPositionAndRotation(_homePos, _homeRot);
+            }
+            _atEffects = !_atEffects;
+        }
+
+        private static OutlineEdgeAA NextEdgeAA(OutlineEdgeAA v) => v switch
+        {
+            OutlineEdgeAA.Off => OutlineEdgeAA.X2,
+            OutlineEdgeAA.X2 => OutlineEdgeAA.X4,
+            OutlineEdgeAA.X4 => OutlineEdgeAA.X8,
+            _ => OutlineEdgeAA.Off,
+        };
     }
 }

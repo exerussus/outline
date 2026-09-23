@@ -16,9 +16,15 @@ MonoBehaviour:
   settings:
     passEvent: 550
     fieldScale: 1
-    extraPass: 1
+    extraPass: 0
+    autoFieldScale: 1
+    fieldBudget: 450000
+    edgeAntialiasing: 4
     fieldScaleWebGL: 0.5
     extraPassWebGL: 0
+    fieldBudgetWebGL: 200000
+    edgeAntialiasingWebGL: 1
+    minFieldScale: 0.25
     maxWidth: 256
     scaleWithResolution: 1
     referenceHeight: 1080
@@ -27,9 +33,6 @@ MonoBehaviour:
     seamBlend: 6
     cropToBounds: 1
     scissor: 1
-    autoFieldScale: 0
-    gpuBudgetMs: 1.5
-    minFieldScale: 0.375
     occlusionBias: 0.02
     transparentCutoff: 0.1
     debugView: 0
@@ -37,6 +40,7 @@ MonoBehaviour:
   maskShader: {fileID: 4800000, guid: 85821fde10c857c4895ace23e8f5c508, type: 3}
   jumpFloodShader: {fileID: 4800000, guid: c37c8fc0da8214d49b4354223bf82c5f, type: 3}
   compositeShader: {fileID: 4800000, guid: 6584b74ab6c640b44a561aa7fdf2f318, type: 3}
+  resolveShader: {fileID: 4800000, guid: 1287e1f733b76b245bedf8e2ae2c30ac, type: 3}
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0

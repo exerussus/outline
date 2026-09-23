@@ -104,12 +104,40 @@ namespace Exerussus.Outline.Lab.Editor
                 AddTarget(go, OutlineStylePresets.GetOrCreate(gallery[i]), 10 + i, 0);
             }
 
+            // второй ряд: эффекты свечения и заливки
+            var effects = OutlineStylePresets.Effects;
+            for (int i = 0; i < effects.Length; i++)
+            {
+                // сдвиг на полшага — чтобы ряд не прятался за первым
+                float x = (i - (effects.Length - 1) * 0.5f) * 1.6f + 0.8f;
+                var go = Primitive(shapes[(i + 1) % shapes.Length], $"Effect {effects[i]}", new Vector3(x, 0.9f, 8f),
+                    Vector3.one * 0.9f, i % 2 == 0 ? blue : grey, true);
+                AddTarget(go, OutlineStylePresets.GetOrCreate(effects[i]), 20 + i, 0);
+            }
+
             CreateBloomVolume();
-            CreateHud(feature);
+            // точка обзора второго ряда (клавиша V в демо, визуальные режимы бенчмарка)
+            var effectsView = new GameObject("EffectsView").transform;
+            effectsView.SetPositionAndRotation(new Vector3(0.8f, 4f, 3f), Quaternion.Euler(32f, 0f, 0f));
+
+            // витрина бенчмарка: отдельный объект вдали от сцены, столбик перед ним — для перекрытой части
+            var showFloor = Primitive(PrimitiveType.Plane, "Showcase Floor", new Vector3(30f, 0f, 0f), Vector3.one * 0.6f, grey, false);
+            showFloor.layer = IgnoreRaycastLayer;
+            var showcase = Primitive(PrimitiveType.Cube, "Showcase Cube", new Vector3(30f, 0.7f, 0f), Vector3.one, blue, false);
+            showcase.transform.rotation = Quaternion.Euler(0f, 30f, 0f);
+            showcase.layer = IgnoreRaycastLayer;
+            // столбик на линии взгляда, чуть правее центра куба: перекрывает его полосой (видна перекрытая часть стиля)
+            var post = Primitive(PrimitiveType.Cylinder, "Showcase Post", new Vector3(30.18f, 0.9f, -0.85f), new Vector3(0.09f, 0.9f, 0.09f), grey, false);
+            post.layer = IgnoreRaycastLayer;
+            var showcaseView = new GameObject("ShowcaseView").transform;
+            showcaseView.SetPositionAndRotation(new Vector3(30f, 1.55f, -2.1f), Quaternion.Euler(20f, 0f, 0f));
+
+            CreateHud(feature, cam, effectsView, showcase.transform, showcaseView);
 
             var demo = cam.gameObject.AddComponent<OutlineLabDemo>();
             var demoSo = new SerializedObject(demo);
             demoSo.FindProperty("targetCamera").objectReferenceValue = cam;
+            demoSo.FindProperty("effectsView").objectReferenceValue = effectsView;
             demoSo.FindProperty("hoverStyle").objectReferenceValue = hover;
             demoSo.FindProperty("selectedStyle").objectReferenceValue = selected;
             demoSo.FindProperty("enemyStyle").objectReferenceValue = enemy;
@@ -148,7 +176,8 @@ namespace Exerussus.Outline.Lab.Editor
             volume.sharedProfile = profile;
         }
 
-        private static void CreateHud(OutlineRendererFeature feature)
+        private static void CreateHud(OutlineRendererFeature feature, Camera cam, Transform effectsView,
+            Transform showcase, Transform showcaseView)
         {
             string path = $"{Generated}/LabPanelSettings.asset";
             var panel = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.PanelSettings>(path);
@@ -171,6 +200,18 @@ namespace Exerussus.Outline.Lab.Editor
             var bench = go.AddComponent<OutlineBenchmark>();
             var bso = new SerializedObject(bench);
             bso.FindProperty("feature").objectReferenceValue = feature;
+            bso.FindProperty("viewCamera").objectReferenceValue = cam;
+            bso.FindProperty("effectsView").objectReferenceValue = effectsView;
+            bso.FindProperty("showcaseObject").objectReferenceValue = showcase;
+            bso.FindProperty("showcaseView").objectReferenceValue = showcaseView;
+            // витрина: служебные стили, первый ряд, эффекты
+            var names = new System.Collections.Generic.List<string> { "Hover", "Selected", "Enemy", "Ghost", "WorldThin" };
+            names.AddRange(OutlineStylePresets.Gallery);
+            names.AddRange(OutlineStylePresets.Effects);
+            var styles = bso.FindProperty("showcaseStyles");
+            styles.arraySize = names.Count;
+            for (int i = 0; i < names.Count; i++)
+                styles.GetArrayElementAtIndex(i).objectReferenceValue = OutlineStylePresets.GetOrCreate(names[i]);
             bso.ApplyModifiedPropertiesWithoutUndo();
 
             var hud = go.AddComponent<OutlineLabHud>();

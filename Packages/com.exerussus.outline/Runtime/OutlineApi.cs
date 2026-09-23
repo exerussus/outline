@@ -190,6 +190,7 @@ namespace Exerussus.Outline
             for (int s = 1; s < SlotCount; s++)
                 if (s_Alive[s])
                     Release(s);
+            OutlineSeeThrough.RestoreAll();
         }
 
         // ------------------------------------------------------------------ Для рендера (internal)
@@ -232,6 +233,18 @@ namespace Exerussus.Outline
             }
             center = default;
             return false;
+        }
+
+        /// <summary>Первый живой рендерер записи (якорь паттерна в пространстве объекта).</summary>
+        internal static Renderer GetFirstRenderer(int slot)
+        {
+            var list = s_Renderers[slot];
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] != null)
+                    return list[i];
+            }
+            return null;
         }
 
         /// <summary>Снимает подсветки, у которых закончился FadeOutAndHide. Идемпотентно, зовётся из рендера.</summary>

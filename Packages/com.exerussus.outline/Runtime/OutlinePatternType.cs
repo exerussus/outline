@@ -11,5 +11,7 @@ namespace Exerussus.Outline
         Scanlines = 5,
         Noise = 6,
         Hex = 7,
+        /// <summary>Своя текстура из <see cref="OutlineStyle.patternTexture"/>: маска = яркость × альфа.</summary>
+        Texture = 8,
     }
 }

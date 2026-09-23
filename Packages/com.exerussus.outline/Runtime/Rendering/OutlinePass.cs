@@ -12,7 +12,8 @@ namespace Exerussus.Outline.Rendering
     /// <summary>
     /// Пайплайн подсветки на Render Graph:
     /// 1) Mask — зарегистрированные рендереры поштучно (DrawRenderer, материал-двойник на пару материал+запись)
-    ///    → RGBA8 (id, rim, видимость, покрытие). Не зависит от GPU Resident Drawer и куллинга камеры;
+    ///    → RGBA8 (id, rim, видимость, покрытие). Не зависит от GPU Resident Drawer и куллинга камеры.
+    ///    Со сглаживанием края маска рисуется в MSAA-цель и резолвится своим проходом: покрытие = доля сэмплов;
     /// 2) JFA Init + Steps — внешнее поле (взвешенное, с наложением на стыке групп) и, если нужно,
     ///    внутреннее (обычное расстояние) — одним MRT-проходом; работа ограничена экранным прямоугольником;
     /// 3) Composite — кривые, заливка, rim, паттерны, перекрытие, анимация, мягкий стык, смешение в цвет камеры.
@@ -26,12 +27,17 @@ namespace Exerussus.Outline.Rendering
         private readonly OutlineMaskMaterials _maskMaterials;
         private readonly Material _jfaMaterial;
         private readonly Material _compositeMaterial;
+        private readonly Material _resolveMaterial; // null — сглаживание края недоступно
+        private readonly LocalKeyword _resolveSurfaceKeyword;
+        private readonly GlobalKeyword _surfaceKeyword = GlobalKeyword.Create("_OUTLINE_SURFACE");
+        private readonly Texture2DArray _dummyArray;
         private readonly OutlineGpuTables _tables = new();
         private readonly MaterialPropertyBlock _mpb = new();
         private readonly List<DrawItem> _draws = new(256);
         private readonly List<Material> _materialScratch = new(8);
 
         private readonly ProfilingSampler _maskSampler = new("Outline Mask");
+        private readonly ProfilingSampler _resolveSampler = new("Outline Mask Resolve");
         private readonly ProfilingSampler _initSampler = new("Outline JFA Init");
         private readonly ProfilingSampler _stepSampler = new("Outline JFA Step");
         private readonly ProfilingSampler _compositeSampler = new("Outline Composite");
@@ -42,24 +48,26 @@ namespace Exerussus.Outline.Rendering
 
         public OutlineStats Stats { get; private set; }
 
-        // авто-разрешение поля: ступени, чтобы пул RT не перевыделялся каждый кадр
-        private static readonly float[] ScaleSteps = { 1f, 0.75f, 0.5f, 0.375f, 0.25f };
-        private int _autoStep;
-        private int _overBudgetFrames;
-        private int _underBudgetFrames;
+        // авто-масштаб поля игровой камеры (гистерезис)
+        private float _autoScale;
+        private int _upFrames;
         private bool _warnedSize;
 
         private readonly struct DrawItem
         {
             public readonly Renderer Renderer;
             public readonly Material Material;
+            public readonly Material Source; // исходный материал — для цвета объекта в режиме прозрачности
             public readonly int Submesh;
+            public readonly int Entry;
 
-            public DrawItem(Renderer renderer, Material material, int submesh)
+            public DrawItem(Renderer renderer, Material material, Material source, int submesh, int entry)
             {
                 Renderer = renderer;
                 Material = material;
+                Source = source;
                 Submesh = submesh;
+                Entry = entry;
             }
         }
 
@@ -67,6 +75,19 @@ namespace Exerussus.Outline.Rendering
         {
             public List<DrawItem> Draws;
             public Vector4 Globals;
+            public bool Surface;
+            public GlobalKeyword SurfaceKeyword;
+            public float[] ObjectSpace;
+        }
+
+        private sealed class ResolvePassData
+        {
+            public Material Material;
+            public MaterialPropertyBlock Mpb;
+            public TextureHandle MaskMS;
+            public TextureHandle PosMS;
+            public Vector4 Params;
+            public Rect Scissor;
         }
 
         private sealed class FullscreenPassData
@@ -77,8 +98,13 @@ namespace Exerussus.Outline.Rendering
             public TextureHandle Mask;
             public TextureHandle Seeds;
             public TextureHandle SeedsInner;
+            public TextureHandle Pos;
+            public TextureHandle Background;
+            public TextureHandle ObjectColor;
             public Texture Data;
             public Texture Lut;
+            public Texture Ramp;
+            public Texture TexArray;
             public Vector4 MaskSize;
             public Vector4 SeedSize;
             public Vector4 Params;
@@ -91,6 +117,9 @@ namespace Exerussus.Outline.Rendering
         private struct FrameConsts
         {
             public TextureHandle Mask;
+            public TextureHandle Background; // копия цвета камеры (прозрачность/маскировка)
+            public TextureHandle ObjectColor; // цвет скрытых объектов их материалами
+            public TextureHandle Pos; // позиции поверхности; только для композита, если есть паттерн Surface*
             public Vector4 MaskSize;
             public Vector4 SeedSize;
             public Vector4 Params2;
@@ -98,27 +127,37 @@ namespace Exerussus.Outline.Rendering
             public float Time;
         }
 
-        public OutlinePass(OutlineSettings settings, Shader maskShader, Shader jfaShader, Shader compositeShader)
+        public OutlinePass(OutlineSettings settings, Shader maskShader, Shader jfaShader, Shader compositeShader,
+            Shader resolveShader)
         {
             _settings = settings;
             _maskMaterials = new OutlineMaskMaterials(maskShader);
             _jfaMaterial = CoreUtils.CreateEngineMaterial(jfaShader);
             _compositeMaterial = CoreUtils.CreateEngineMaterial(compositeShader);
+            if (resolveShader != null && resolveShader.isSupported && SystemInfo.supportsMultisampledTextures != 0)
+            {
+                _resolveMaterial = CoreUtils.CreateEngineMaterial(resolveShader);
+                _resolveSurfaceKeyword = new LocalKeyword(resolveShader, "_OUTLINE_SURFACE");
+            }
+            _dummyArray = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false)
+            {
+                name = "OutlineDummyArray",
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            _dummyArray.SetPixels(new[] { Color.white }, 0);
+            _dummyArray.Apply(false, true);
             profilingSampler = new ProfilingSampler("Outline");
             ConfigureInput(ScriptableRenderPassInput.Depth);
             // маска и композит работают в пикселях одной ориентации — пишем только в промежуточную цель
             requiresIntermediateTexture = true;
-
-            _maskSampler.enableRecording = true;
-            _initSampler.enableRecording = true;
-            _stepSampler.enableRecording = true;
-            _compositeSampler.enableRecording = true;
         }
 
         public void Dispose()
         {
             CoreUtils.Destroy(_jfaMaterial);
             CoreUtils.Destroy(_compositeMaterial);
+            CoreUtils.Destroy(_resolveMaterial);
+            CoreUtils.Destroy(_dummyArray);
             _tables.Dispose();
             _maskMaterials.Dispose();
         }
@@ -152,30 +191,24 @@ namespace Exerussus.Outline.Rendering
                 return;
             }
 
-            float fieldScale = ResolveFieldScale(cameraData);
-            int fieldW = Mathf.Clamp(Mathf.CeilToInt(width * fieldScale), 1, MaxFieldSize);
-            int fieldH = Mathf.Clamp(Mathf.CeilToInt(height * fieldScale), 1, MaxFieldSize);
-            // реальный масштаб после клампа (4K+ при fieldScale = 1 упрётся в 4095)
-            fieldScale = Mathf.Min(fieldW / (float)width, fieldH / (float)height);
-
             float now = OutlineClock.Now;
             var camera = cameraData.camera;
-            if (!_tables.Build(camera, height, fieldScale, _settings, now) || !BuildDrawList(camera, width, height))
+            if (!_tables.Build(camera, width, height, 1f, _settings, now) || !BuildDrawList(camera, width, height))
             {
                 StoreStats(cameraData, default);
                 return;
             }
 
-            // --- прямоугольник работы в пикселях поля ---
-            var rect = new Vector4(0, 0, fieldW, fieldH);
+            // --- область работы в пикселях кадра (x0, y0, x1, y1) ---
+            var area = new Vector4(0, 0, width, height);
             if (_settings.cropToBounds && !_boundsUnbounded)
             {
                 float pad = _tables.MaxRange + _settings.seamBlend + 2f;
-                rect.x = Mathf.Clamp(Mathf.Floor((_screenBounds.x - pad) * fieldScale), 0, fieldW);
-                rect.y = Mathf.Clamp(Mathf.Floor((_screenBounds.y - pad) * fieldScale), 0, fieldH);
-                rect.z = Mathf.Clamp(Mathf.Ceil((_screenBounds.z + pad) * fieldScale), 0, fieldW);
-                rect.w = Mathf.Clamp(Mathf.Ceil((_screenBounds.w + pad) * fieldScale), 0, fieldH);
-                if (rect.z <= rect.x || rect.w <= rect.y)
+                area.x = Mathf.Clamp(Mathf.Floor(_screenBounds.x - pad), 0, width);
+                area.y = Mathf.Clamp(Mathf.Floor(_screenBounds.y - pad), 0, height);
+                area.z = Mathf.Clamp(Mathf.Ceil(_screenBounds.z + pad), 0, width);
+                area.w = Mathf.Clamp(Mathf.Ceil(_screenBounds.w + pad), 0, height);
+                if (area.z <= area.x || area.w <= area.y)
                 {
                     StoreStats(cameraData, default);
                     return; // всё подсвеченное вне кадра и вне досягаемости свечения
@@ -183,8 +216,37 @@ namespace Exerussus.Outline.Rendering
             }
 
             bool dual = _tables.NeedsInnerField;
+            bool extra = _settings.EffectiveExtraPass;
+            float areaPx = (area.z - area.x) * (area.w - area.y);
+            float fieldScale = ResolveFieldScale(cameraData, areaPx, dual, extra, out long cost);
+
+            int fieldW = Mathf.Clamp(Mathf.CeilToInt(width * fieldScale), 1, MaxFieldSize);
+            int fieldH = Mathf.Clamp(Mathf.CeilToInt(height * fieldScale), 1, MaxFieldSize);
+            // реальный масштаб после округления размеров
+            fieldScale = Mathf.Min(fieldW / (float)width, fieldH / (float)height);
+
+            // --- прямоугольник работы в пикселях поля ---
+            var rect = new Vector4(
+                Mathf.Clamp(Mathf.Floor(area.x * fieldScale), 0, fieldW),
+                Mathf.Clamp(Mathf.Floor(area.y * fieldScale), 0, fieldH),
+                Mathf.Clamp(Mathf.Ceil(area.z * fieldScale), 0, fieldW),
+                Mathf.Clamp(Mathf.Ceil(area.w * fieldScale), 0, fieldH));
+
+
+            // scissor: поле — в его пикселях, композит — в пикселях кадра (y снизу, как у Unity для RT)
+            bool useScissor = _settings.cropToBounds && _settings.scissor && !_boundsUnbounded;
+            var fieldScissor = useScissor ? new Rect(rect.x, rect.y, rect.z - rect.x, rect.w - rect.y) : Rect.zero;
+            var frameScissor = Rect.zero;
+            if (useScissor)
+            {
+                float inv = 1f / fieldScale;
+                float fx = Mathf.Floor(rect.x * inv), fy = Mathf.Floor(rect.y * inv);
+                frameScissor = new Rect(fx, fy,
+                    Mathf.Min(width, Mathf.Ceil(rect.z * inv)) - fx, Mathf.Min(height, Mathf.Ceil(rect.w * inv)) - fy);
+            }
 
             // --- текстуры кадра ---
+            int samples = ResolveEdgeSamples(width, height);
             var maskDesc = new TextureDesc(width, height)
             {
                 name = "_OutlineMask",
@@ -196,13 +258,25 @@ namespace Exerussus.Outline.Rendering
             };
             var mask = renderGraph.CreateTexture(maskDesc);
 
+            // позиции поверхности для паттернов Surface*: half-float, xyz + ось нормали
+            bool surface = _tables.NeedsSurface;
+            var posDesc = new TextureDesc(width, height)
+            {
+                name = "_OutlinePos",
+                format = GraphicsFormat.R16G16B16A16_SFloat,
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp,
+                clearBuffer = true,
+                clearColor = Color.clear,
+            };
+            var pos = surface ? renderGraph.CreateTexture(posDesc) : TextureHandle.nullHandle;
+
             var depthDesc = new TextureDesc(width, height)
             {
                 name = "_OutlineMaskDepth",
                 format = SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil),
                 clearBuffer = true,
             };
-            var maskDepth = renderGraph.CreateTexture(depthDesc);
 
             var seedDesc = new TextureDesc(fieldW, fieldH)
             {
@@ -226,36 +300,50 @@ namespace Exerussus.Outline.Rendering
             }
 
             // --- 1. маска ---
-            RecordMask(renderGraph, resourceData, mask, maskDepth);
+            if (samples > 1)
+            {
+                var msDesc = maskDesc;
+                msDesc.name = "_OutlineMaskMS";
+                msDesc.msaaSamples = (MSAASamples)samples;
+                msDesc.bindTextureMS = true;
+                var maskMS = renderGraph.CreateTexture(msDesc);
+                var msDepthDesc = depthDesc;
+                msDepthDesc.name = "_OutlineMaskDepthMS";
+                msDepthDesc.msaaSamples = (MSAASamples)samples;
+                var maskDepthMS = renderGraph.CreateTexture(msDepthDesc);
+                var posMS = TextureHandle.nullHandle;
+                if (surface)
+                {
+                    var posMsDesc = posDesc;
+                    posMsDesc.name = "_OutlinePosMS";
+                    posMsDesc.msaaSamples = (MSAASamples)samples;
+                    posMsDesc.bindTextureMS = true;
+                    posMS = renderGraph.CreateTexture(posMsDesc);
+                }
+                RecordMask(renderGraph, resourceData, maskMS, maskDepthMS, posMS);
+                RecordResolve(renderGraph, maskMS, mask, posMS, pos, samples, frameScissor);
+            }
+            else
+            {
+                var maskDepth = renderGraph.CreateTexture(depthDesc);
+                RecordMask(renderGraph, resourceData, mask, maskDepth, pos);
+            }
 
             var frame = new FrameConsts
             {
                 Mask = mask,
+                Pos = pos,
                 MaskSize = new Vector4(width, height, 1f / width, 1f / height),
                 SeedSize = new Vector4(fieldW, fieldH, fieldScale, 1f / fieldScale),
-                Params2 = new Vector4(_settings.seamOverlay ? 1f : 0f, dual ? 1f : 0f, 0f, 0f),
+                Params2 = new Vector4(_settings.seamOverlay ? 1f : 0f, dual ? 1f : 0f, _tables.MaxRange, 0f),
                 Rect = rect,
                 Time = now % 3600f,
             };
 
-            // scissor: поле — в его пикселях, композит — в пикселях кадра (y снизу, как у Unity для RT)
-            bool useScissor = _settings.cropToBounds && _settings.scissor && !_boundsUnbounded;
-            var fieldScissor = useScissor ? new Rect(rect.x, rect.y, rect.z - rect.x, rect.w - rect.y) : Rect.zero;
-            var frameScissor = Rect.zero;
-            if (useScissor)
-            {
-                float inv = 1f / fieldScale;
-                float fx = Mathf.Floor(rect.x * inv), fy = Mathf.Floor(rect.y * inv);
-                frameScissor = new Rect(fx, fy,
-                    Mathf.Min(width, Mathf.Ceil(rect.z * inv)) - fx, Mathf.Min(height, Mathf.Ceil(rect.w * inv)) - fy);
-            }
-
             // --- 2. JFA ---
             // внутреннее поле нужно только на дальность внутреннего контура (обычно единицы px) — его шаги
             // включаются лишь на последних проходах; крупные шаги считают одно внешнее поле
-            int innerStart = 0;
-            if (dual)
-                innerStart = Mathf.NextPowerOfTwo(Mathf.Max(1, Mathf.CeilToInt(_tables.MaxInnerRange * fieldScale)));
+            int innerStart = dual ? OutlineQuality.InnerStartStep(_tables.MaxInnerRange, fieldScale) : 0;
 
             RecordFullscreen(renderGraph, _initSampler, _jfaMaterial,
                 dual ? OutlineShaderIds.PassInitDual : OutlineShaderIds.PassInit,
@@ -268,13 +356,17 @@ namespace Exerussus.Outline.Rendering
             var innerNext = innerB;
             int passes = 0;
 
-            float rangeField = _tables.MaxRange * fieldScale;
-            int step = Mathf.NextPowerOfTwo(Mathf.Max(1, Mathf.CeilToInt(rangeField)));
-            // начинаем с половины: ближайшая степень двойки ≥ дальности покрывает её одним шагом
-            int extra = _settings.EffectiveExtraPass ? 1 : 0;
-            for (step = Mathf.Max(1, step / 2); step >= 1 || extra-- > 0; step >>= 1)
+            // шаги: от StartStep до 1, затем (опционально) ещё один шаг 1 — та же раскладка, что в OutlineQuality
+            int start = OutlineQuality.StartStep(_tables.MaxRange, fieldScale);
+            int total = 0;
+            for (int st = start; st >= 1; st >>= 1)
+                total++;
+            if (extra)
+                total++;
+
+            for (int i = 0; i < total; i++)
             {
-                int s = Mathf.Max(1, step);
+                int s = Mathf.Max(1, start >> i);
                 bool withInner = dual && s <= innerStart;
                 RecordFullscreen(renderGraph, _stepSampler, _jfaMaterial,
                     withInner ? OutlineShaderIds.PassStepDual : OutlineShaderIds.PassStep,
@@ -286,16 +378,56 @@ namespace Exerussus.Outline.Rendering
                 passes++;
             }
 
-            // --- 3. композит в цвет камеры (с блендингом — нужен ReadWrite) ---
+            // --- 3. новые текстуры стилей → массив (только когда появились) ---
+            if (_tables.Textures.HasPending)
+                RecordTextureUpload(renderGraph);
+
+            // --- 4. прозрачность/маскировка: фон (копия цвета камеры) и цвет самих объектов ---
+            if (_tables.NeedsBackground)
+            {
+                var colorDesc = renderGraph.GetTextureDesc(resourceData.activeColorTexture);
+                var bgDesc = new TextureDesc(width, height)
+                {
+                    name = "_OutlineBackground",
+                    format = colorDesc.format,
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp,
+                    clearBuffer = false,
+                };
+                frame.Background = renderGraph.CreateTexture(bgDesc);
+                RecordBackgroundCopy(renderGraph, resourceData.activeColorTexture, frame.Background, frameScissor);
+
+                if (_tables.NeedsObjectColor)
+                {
+                    var objDesc = new TextureDesc(width, height)
+                    {
+                        name = "_OutlineObjectColor",
+                        format = GraphicsFormat.R16G16B16A16_SFloat,
+                        filterMode = FilterMode.Point,
+                        wrapMode = TextureWrapMode.Clamp,
+                        clearBuffer = true,
+                        clearColor = Color.clear,
+                    };
+                    frame.ObjectColor = renderGraph.CreateTexture(objDesc);
+                    var objDepth = renderGraph.CreateTexture(new TextureDesc(width, height)
+                    {
+                        name = "_OutlineObjectDepth",
+                        format = SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil),
+                        clearBuffer = true,
+                    });
+                    RecordObjectColor(renderGraph, frame.ObjectColor, objDepth);
+                }
+            }
+
+            // --- 5. композит в цвет камеры (с блендингом — нужен ReadWrite) ---
             RecordFullscreen(renderGraph, _compositeSampler, _compositeMaterial, 0,
                 resourceData.activeColorTexture, TextureHandle.nullHandle, AccessFlags.ReadWrite,
                 outerCur, dual ? innerCur : outerCur, frame, 0f, (float)_settings.debugView, frameScissor);
 
             float coverage = (rect.z - rect.x) * (rect.w - rect.y) / (fieldW * (float)fieldH);
             float cpuMs = (Stopwatch.GetTimestamp() - t0) * 1000f / Stopwatch.Frequency;
-            StoreStats(cameraData, new OutlineStats(true, _tables.ActiveCount, _draws.Count, passes + 1, dual, fieldW, fieldH, fieldScale,
-                coverage, _maskSampler.gpuElapsedTime, _initSampler.gpuElapsedTime + _stepSampler.gpuElapsedTime,
-                _compositeSampler.gpuElapsedTime, cpuMs));
+            StoreStats(cameraData, new OutlineStats(true, _tables.ActiveCount, _draws.Count, passes + 1, dual,
+                fieldW, fieldH, fieldScale, coverage, cost, _settings.EffectiveFieldBudget, samples, cpuMs));
         }
 
         // статистику храним только для игровых камер — Scene View не должен перетирать цифры HUD
@@ -306,38 +438,54 @@ namespace Exerussus.Outline.Rendering
         }
 
         /// <summary>
-        /// Масштаб поля: из настроек (Desktop/WebGL) или авто-ступень по GPU-времени прошлого кадра.
-        /// Ступень меняется только от игровой камеры и с гистерезисом (10 кадров вниз, 90 вверх).
+        /// Масштаб поля: фиксированный из настроек или авто по бюджету (OutlineQuality).
+        /// Для игровой камеры — гистерезис: вниз сразу, если текущий масштаб превышает бюджет на 10%,
+        /// вверх — после 30 кадров подряд, когда больший масштаб укладывается.
         /// </summary>
-        private float ResolveFieldScale(UniversalCameraData cameraData)
+        private float ResolveFieldScale(UniversalCameraData cameraData, float areaPx, bool dual, bool extra, out long cost)
         {
             float max = _settings.EffectiveFieldScale;
-            if (!_settings.autoFieldScale || !SystemInfo.supportsGpuRecorder)
-                return max;
-
-            int top = 0;
-            while (top < ScaleSteps.Length - 1 && ScaleSteps[top] > max + 1e-4f)
-                top++;
-            int bottom = top;
-            while (bottom < ScaleSteps.Length - 1 && ScaleSteps[bottom + 1] >= _settings.minFieldScale - 1e-4f)
-                bottom++;
-
-            if (cameraData.cameraType == CameraType.Game && Stats.Rendered)
+            if (!_settings.autoFieldScale)
             {
-                float gpu = Stats.TotalGpuMs;
-                if (gpu > 0f)
-                {
-                    if (gpu > _settings.gpuBudgetMs * 1.15f) { _overBudgetFrames++; _underBudgetFrames = 0; }
-                    else if (gpu < _settings.gpuBudgetMs * 0.5f) { _underBudgetFrames++; _overBudgetFrames = 0; }
-                    else { _overBudgetFrames = 0; _underBudgetFrames = 0; }
-
-                    if (_overBudgetFrames >= 10) { _autoStep++; _overBudgetFrames = 0; }
-                    if (_underBudgetFrames >= 90) { _autoStep--; _underBudgetFrames = 0; }
-                }
+                cost = OutlineQuality.Cost(areaPx, _tables.MaxRange, _tables.MaxInnerRange, max, dual, extra);
+                return max;
             }
 
-            _autoStep = Mathf.Clamp(_autoStep, top, bottom);
-            return ScaleSteps[_autoStep];
+            long budget = _settings.EffectiveFieldBudget;
+            float min = Mathf.Min(_settings.minFieldScale, max);
+            float target = OutlineQuality.Choose(areaPx, _tables.MaxRange, _tables.MaxInnerRange, dual, extra,
+                max, min, budget, out cost);
+
+            if (cameraData.cameraType != CameraType.Game)
+                return target;
+
+            if (_autoScale <= 0f || _autoScale > max + 1e-4f || _autoScale < min - 1e-4f)
+            {
+                _autoScale = target;
+                _upFrames = 0;
+            }
+            else if (target < _autoScale)
+            {
+                long current = OutlineQuality.Cost(areaPx, _tables.MaxRange, _tables.MaxInnerRange, _autoScale, dual, extra);
+                if (current > budget * 1.1f)
+                    _autoScale = target;
+                _upFrames = 0;
+            }
+            else if (target > _autoScale)
+            {
+                if (++_upFrames >= 30)
+                {
+                    _autoScale = target;
+                    _upFrames = 0;
+                }
+            }
+            else
+            {
+                _upFrames = 0;
+            }
+
+            cost = OutlineQuality.Cost(areaPx, _tables.MaxRange, _tables.MaxInnerRange, _autoScale, dual, extra);
+            return _autoScale;
         }
 
         /// <summary>
@@ -387,7 +535,7 @@ namespace Exerussus.Outline.Rendering
                     {
                         var src = m < _materialScratch.Count ? _materialScratch[m] : null;
                         var mat = _maskMaterials.Get(src, id, mode, threshold, transparentCutoff);
-                        _draws.Add(new DrawItem(r, mat, Mathf.Min(m, subCount - 1)));
+                        _draws.Add(new DrawItem(r, mat, src, Mathf.Min(m, subCount - 1), id));
                     }
                 }
             }
@@ -438,7 +586,7 @@ namespace Exerussus.Outline.Rendering
         }
 
         private void RecordMask(RenderGraph renderGraph, UniversalResourceData resourceData,
-            TextureHandle mask, TextureHandle maskDepth)
+            TextureHandle mask, TextureHandle maskDepth, TextureHandle pos)
         {
             using var builder = renderGraph.AddRasterRenderPass<MaskPassData>("Outline Mask", out var data, _maskSampler);
 
@@ -451,12 +599,22 @@ namespace Exerussus.Outline.Rendering
             data.Globals = new Vector4(_settings.occlusionBias, 0f, hasDepth ? 1f : 0f, 0f);
 
             builder.SetRenderAttachment(mask, 0, AccessFlags.Write);
+            data.Surface = pos.IsValid();
+            data.SurfaceKeyword = _surfaceKeyword;
+            data.ObjectSpace = _tables.SurfaceObjectSpace;
+            if (data.Surface)
+                builder.SetRenderAttachment(pos, 1, AccessFlags.Write);
             builder.SetRenderAttachmentDepth(maskDepth, AccessFlags.Write);
             builder.AllowGlobalStateModification(true);
             builder.AllowPassCulling(false);
             builder.SetRenderFunc(static (MaskPassData d, RasterGraphContext ctx) =>
             {
                 ctx.cmd.SetGlobalVector(OutlineShaderIds.MaskGlobals, d.Globals);
+                if (d.Surface)
+                {
+                    ctx.cmd.SetGlobalFloatArray(OutlineShaderIds.MaskObjectSpace, d.ObjectSpace);
+                    ctx.cmd.EnableKeyword(d.SurfaceKeyword);
+                }
                 var draws = d.Draws;
                 for (int i = 0; i < draws.Count; i++)
                 {
@@ -464,6 +622,134 @@ namespace Exerussus.Outline.Rendering
                     if (item.Renderer != null)
                         ctx.cmd.DrawRenderer(item.Renderer, item.Material, item.Submesh, 0);
                 }
+                if (d.Surface)
+                    ctx.cmd.DisableKeyword(d.SurfaceKeyword);
+            });
+        }
+
+        /// <summary>Число сэмплов маски: из настроек, если резолв доступен и формат поддерживает MSAA.</summary>
+        private int ResolveEdgeSamples(int width, int height)
+        {
+            int requested = _settings.EffectiveEdgeSamples;
+            if (requested <= 1 || _resolveMaterial == null)
+                return 1;
+            var desc = new RenderTextureDescriptor(width, height, GraphicsFormat.R8G8B8A8_UNorm,
+                SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil)) { msaaSamples = requested };
+            return Mathf.Max(1, SystemInfo.GetRenderTextureSupportedMSAASampleCount(desc));
+        }
+
+        private void RecordResolve(RenderGraph renderGraph, TextureHandle maskMS, TextureHandle mask,
+            TextureHandle posMS, TextureHandle pos, int samples, Rect scissorRect)
+        {
+            bool surface = posMS.IsValid() && pos.IsValid();
+            _resolveMaterial.SetKeyword(_resolveSurfaceKeyword, surface);
+            using var builder = renderGraph.AddRasterRenderPass<ResolvePassData>(_resolveSampler.name, out var data, _resolveSampler);
+            data.Material = _resolveMaterial;
+            data.Mpb = _mpb;
+            data.MaskMS = maskMS;
+            data.PosMS = surface ? posMS : TextureHandle.nullHandle;
+            data.Params = new Vector4(samples, 0f, 0f, 0f);
+            data.Scissor = scissorRect;
+
+            builder.UseTexture(maskMS);
+            builder.SetRenderAttachment(mask, 0, AccessFlags.Write);
+            if (surface)
+            {
+                builder.UseTexture(posMS);
+                builder.SetRenderAttachment(pos, 1, AccessFlags.Write);
+            }
+            builder.SetRenderFunc(static (ResolvePassData d, RasterGraphContext ctx) =>
+            {
+                var mpb = d.Mpb;
+                mpb.Clear();
+                mpb.SetTexture(OutlineShaderIds.MaskMS, (Texture)d.MaskMS);
+                if (d.PosMS.IsValid())
+                    mpb.SetTexture(OutlineShaderIds.PosMS, (Texture)d.PosMS);
+                mpb.SetVector(OutlineShaderIds.ResolveParams, d.Params);
+                bool scissor = d.Scissor.width > 0f && d.Scissor.height > 0f;
+                if (scissor)
+                    ctx.cmd.EnableScissorRect(d.Scissor);
+                ctx.cmd.DrawProcedural(Matrix4x4.identity, d.Material, 0, MeshTopology.Triangles, 3, 1, mpb);
+                if (scissor)
+                    ctx.cmd.DisableScissorRect();
+            });
+        }
+
+        private sealed class CopyPassData
+        {
+            public TextureHandle Source;
+            public Rect Scissor;
+        }
+
+        private sealed class ObjectColorPassData
+        {
+            public List<DrawItem> Draws;
+            public OutlineGpuTables Tables;
+        }
+
+        private void RecordBackgroundCopy(RenderGraph renderGraph, TextureHandle source, TextureHandle target, Rect scissor)
+        {
+            using var builder = renderGraph.AddRasterRenderPass<CopyPassData>("Outline Background Copy", out var data, _compositeSampler);
+            data.Source = source;
+            data.Scissor = scissor;
+            builder.UseTexture(source);
+            builder.SetRenderAttachment(target, 0, AccessFlags.Write);
+            builder.SetRenderFunc(static (CopyPassData d, RasterGraphContext ctx) =>
+            {
+                bool sc = d.Scissor.width > 0f && d.Scissor.height > 0f;
+                if (sc)
+                    ctx.cmd.EnableScissorRect(d.Scissor);
+                Blitter.BlitTexture(ctx.cmd, d.Source, new Vector4(1f, 1f, 0f, 0f), 0f, false);
+                if (sc)
+                    ctx.cmd.DisableScissorRect();
+            });
+        }
+
+        /// <summary>
+        /// Скрытые объекты (прозрачность) их собственными материалами — проход UniversalForward, освещение
+        /// кадра берётся из глобальных данных URP.
+        /// </summary>
+        private void RecordObjectColor(RenderGraph renderGraph, TextureHandle target, TextureHandle depth)
+        {
+            using var builder = renderGraph.AddRasterRenderPass<ObjectColorPassData>("Outline Object Color", out var data, _maskSampler);
+            data.Draws = _draws;
+            data.Tables = _tables;
+            builder.UseAllGlobalTextures(true);
+            builder.SetRenderAttachment(target, 0, AccessFlags.Write);
+            builder.SetRenderAttachmentDepth(depth, AccessFlags.Write);
+            builder.AllowPassCulling(false);
+            builder.AllowGlobalStateModification(true);
+            builder.SetRenderFunc(static (ObjectColorPassData d, RasterGraphContext ctx) =>
+            {
+                var draws = d.Draws;
+                for (int i = 0; i < draws.Count; i++)
+                {
+                    var item = draws[i];
+                    if (item.Renderer == null || item.Source == null || !d.Tables.IsSeeThrough(item.Entry))
+                        continue;
+                    int pass = item.Source.FindPass("UniversalForward");
+                    if (pass < 0)
+                        pass = item.Source.FindPass("UniversalForwardOnly");
+                    if (pass < 0)
+                        pass = 0;
+                    ctx.cmd.DrawRenderer(item.Renderer, item.Source, item.Submesh, pass);
+                }
+            });
+        }
+
+        private sealed class UploadPassData
+        {
+            public OutlineTextureArray Textures;
+        }
+
+        private void RecordTextureUpload(RenderGraph renderGraph)
+        {
+            using var builder = renderGraph.AddUnsafePass<UploadPassData>("Outline Style Textures", out var data);
+            data.Textures = _tables.Textures;
+            builder.AllowPassCulling(false);
+            builder.SetRenderFunc(static (UploadPassData d, UnsafeGraphContext ctx) =>
+            {
+                d.Textures.FlushPending(CommandBufferHelpers.GetNativeCommandBuffer(ctx.cmd));
             });
         }
 
@@ -480,8 +766,14 @@ namespace Exerussus.Outline.Rendering
             data.Mask = frame.Mask;
             data.Seeds = seeds;
             data.SeedsInner = seedsInner;
+            bool composite = material == _compositeMaterial;
+            data.Pos = composite ? frame.Pos : TextureHandle.nullHandle;
+            data.Background = composite ? frame.Background : TextureHandle.nullHandle;
+            data.ObjectColor = composite ? frame.ObjectColor : TextureHandle.nullHandle;
             data.Data = _tables.Data;
             data.Lut = _tables.Lut;
+            data.Ramp = _tables.Ramp;
+            data.TexArray = _tables.Textures.Array != null ? _tables.Textures.Array : _dummyArray;
             data.MaskSize = frame.MaskSize;
             data.SeedSize = frame.SeedSize;
             data.Params = new Vector4(frame.Time, step, _settings.seamBlend, debugView);
@@ -491,6 +783,12 @@ namespace Exerussus.Outline.Rendering
             data.Scissor = scissorRect;
 
             builder.UseTexture(frame.Mask);
+            if (data.Pos.IsValid())
+                builder.UseTexture(data.Pos);
+            if (data.Background.IsValid())
+                builder.UseTexture(data.Background);
+            if (data.ObjectColor.IsValid())
+                builder.UseTexture(data.ObjectColor);
             if (seeds.IsValid())
                 builder.UseTexture(seeds);
             if (seedsInner.IsValid() && !seedsInner.Equals(seeds))
@@ -505,12 +803,18 @@ namespace Exerussus.Outline.Rendering
                 var mpb = d.Mpb;
                 mpb.Clear();
                 mpb.SetTexture(OutlineShaderIds.Mask, (Texture)d.Mask);
+                // без карты позиций шейдер её не читает, но слот должен быть занят
+                mpb.SetTexture(OutlineShaderIds.Pos, d.Pos.IsValid() ? (Texture)d.Pos : (Texture)d.Mask);
+                mpb.SetTexture(OutlineShaderIds.Background, d.Background.IsValid() ? (Texture)d.Background : Texture2D.blackTexture);
+                mpb.SetTexture(OutlineShaderIds.ObjectColor, d.ObjectColor.IsValid() ? (Texture)d.ObjectColor : Texture2D.blackTexture);
                 if (d.Seeds.IsValid())
                     mpb.SetTexture(OutlineShaderIds.Seeds, (Texture)d.Seeds);
                 if (d.SeedsInner.IsValid())
                     mpb.SetTexture(OutlineShaderIds.SeedsInner, (Texture)d.SeedsInner);
                 mpb.SetTexture(OutlineShaderIds.Data, d.Data);
                 mpb.SetTexture(OutlineShaderIds.Lut, d.Lut);
+                mpb.SetTexture(OutlineShaderIds.Ramp, d.Ramp);
+                mpb.SetTexture(OutlineShaderIds.TexArray, d.TexArray);
                 mpb.SetVector(OutlineShaderIds.MaskSize, d.MaskSize);
                 mpb.SetVector(OutlineShaderIds.SeedSize, d.SeedSize);
                 mpb.SetVector(OutlineShaderIds.Params, d.Params);

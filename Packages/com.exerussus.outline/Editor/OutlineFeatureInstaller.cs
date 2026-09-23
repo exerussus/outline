@@ -25,6 +25,7 @@ namespace Exerussus.Outline.Editor
             var mask = Shader.Find(OutlineRendererFeature.MaskShaderName);
             var jfa = Shader.Find(OutlineRendererFeature.JumpFloodShaderName);
             var comp = Shader.Find(OutlineRendererFeature.CompositeShaderName);
+            var resolve = Shader.Find(OutlineRendererFeature.ResolveShaderName);
 
             int added = 0;
             foreach (var guid in AssetDatabase.FindAssets("t:UniversalRendererData"))
@@ -63,6 +64,7 @@ namespace Exerussus.Outline.Editor
                 fso.FindProperty("maskShader").objectReferenceValue = mask;
                 fso.FindProperty("jumpFloodShader").objectReferenceValue = jfa;
                 fso.FindProperty("compositeShader").objectReferenceValue = comp;
+                fso.FindProperty("resolveShader").objectReferenceValue = resolve;
                 fso.ApplyModifiedPropertiesWithoutUndo();
 
                 EditorUtility.SetDirty(feature);

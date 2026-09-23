@@ -1,6 +1,7 @@
 // Маска подсветки. Рисуется поштучно (DrawRenderer) материалом-двойником на пару (исходный материал, запись):
 // текстура/цвет альфы копируются с исходного материала на CPU, id и порог клипа — свойства двойника.
 // Выход RGBA8: r = id/255, g = rim (1 - |N·V|), b = 1 видим / 0 перекрыт сценой, a = 1.
+// С _OUTLINE_SURFACE — второй таргет: позиция поверхности (объект или мир, по записи) + доминирующая ось нормали.
 Shader "Hidden/Exerussus/Outline/Mask"
 {
     Properties
@@ -27,6 +28,7 @@ Shader "Hidden/Exerussus/Outline/Mask"
             #pragma target 3.5
             #pragma vertex Vert
             #pragma fragment Frag
+            #pragma multi_compile _ _OUTLINE_SURFACE
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
@@ -41,6 +43,7 @@ Shader "Hidden/Exerussus/Outline/Mask"
             CBUFFER_END
 
             float4 _OutlineMaskGlobals; // x occlusionBias, z есть глубина сцены
+            float _OutlineMaskObjectSpace[64]; // по id записи: 1 — позиция в координатах объекта, 0 — мира
 
             struct Attributes
             {
@@ -55,7 +58,23 @@ Shader "Hidden/Exerussus/Outline/Mask"
                 float3 positionWS : TEXCOORD0;
                 float3 normalWS : TEXCOORD1;
                 float2 uv : TEXCOORD2;
+                float3 positionOS : TEXCOORD3;
+                float3 normalOS : TEXCOORD4;
             };
+
+            struct MaskOut
+            {
+                half4 mask : SV_Target0;
+            #if defined(_OUTLINE_SURFACE)
+                float4 surface : SV_Target1;
+            #endif
+            };
+
+            float DominantAxis(float3 n)
+            {
+                float3 a = abs(n);
+                return a.x >= a.y && a.x >= a.z ? 0.0 : (a.y >= a.z ? 1.0 : 2.0);
+            }
 
             Varyings Vert(Attributes input)
             {
@@ -64,6 +83,8 @@ Shader "Hidden/Exerussus/Outline/Mask"
                 o.positionCS = TransformWorldToHClip(o.positionWS);
                 o.normalWS = TransformObjectToWorldNormal(input.normalOS);
                 o.uv = TRANSFORM_TEX(input.uv, _BaseMap);
+                o.positionOS = input.positionOS.xyz;
+                o.normalOS = input.normalOS;
                 return o;
             }
 
@@ -79,7 +100,7 @@ Shader "Hidden/Exerussus/Outline/Mask"
                 return LinearEyeDepth(raw, _ZBufferParams);
             }
 
-            half4 Frag(Varyings input) : SV_Target
+            MaskOut Frag(Varyings input)
             {
                 uint id = (uint)round(_OutlineId);
                 if (id == 0u)
@@ -107,7 +128,15 @@ Shader "Hidden/Exerussus/Outline/Mask"
                     visible = selfEye <= sceneEye + bias ? 1.0 : 0.0;
                 }
 
-                return half4(id / 255.0, rim, visible, 1.0);
+                MaskOut o;
+                o.mask = half4(id / 255.0, rim, visible, 1.0);
+            #if defined(_OUTLINE_SURFACE)
+                bool objectSpace = _OutlineMaskObjectSpace[id] > 0.5;
+                float3 pos = objectSpace ? input.positionOS : input.positionWS;
+                float3 nrm = objectSpace ? input.normalOS : input.normalWS;
+                o.surface = float4(pos, DominantAxis(nrm));
+            #endif
+                return o;
             }
             ENDHLSL
         }
