@@ -44,6 +44,25 @@ Shader "Hidden/Exerussus/Outline/Resolve"
                 int2 p = int2(input.positionCS.xy);
                 int n = clamp((int)_OutlineResolveParams.x, 1, OL_MAX_SAMPLES);
 
+                // быстрый путь: все сэмплы одного id (пустота или толща силуэта) — большинство пикселей
+                float4 s0 = LOAD_TEXTURE2D_MSAA(_OutlineMaskMS, p, 0);
+                uint id0 = OutlineMaskId(s0);
+                bool same = true;
+                [loop]
+                for (int f = 1; f < n; f++)
+                    same = same && OutlineMaskId(LOAD_TEXTURE2D_MSAA(_OutlineMaskMS, p, f)) == id0;
+                if (same)
+                {
+                    if (id0 == 0u)
+                        return o;
+                    o.mask = float4(s0.rgb, 1.0);
+                #if defined(_OUTLINE_SURFACE)
+                    o.surface = LOAD_TEXTURE2D_MSAA(_OutlinePosMS, p, 0);
+                #endif
+                    return o;
+                }
+
+                // край: полный разбор сэмплов
                 float4 s[OL_MAX_SAMPLES];
                 uint ids[OL_MAX_SAMPLES];
                 uint covered = 0u;

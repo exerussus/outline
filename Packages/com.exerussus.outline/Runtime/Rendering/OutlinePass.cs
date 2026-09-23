@@ -78,6 +78,8 @@ namespace Exerussus.Outline.Rendering
             public bool Surface;
             public GlobalKeyword SurfaceKeyword;
             public float[] ObjectSpace;
+            public Rect ClearRect;
+            public Material ClearMaterial;
         }
 
         private sealed class ResolvePassData
@@ -245,6 +247,18 @@ namespace Exerussus.Outline.Rendering
                     Mathf.Min(width, Mathf.Ceil(rect.z * inv)) - fx, Mathf.Min(height, Mathf.Ceil(rect.w * inv)) - fy);
             }
 
+            // Очистка целей маски только прямоугольником работы (с запасом: JFA Init смотрит соседей и блок k×k),
+            // а не всей текстуры — на слабом GPU очистка полноэкранной MSAA-маски стоит заметно
+            bool scissorClear = useScissor;
+            var maskScissor = Rect.zero;
+            if (scissorClear)
+            {
+                const float pad = 6f;
+                float x0 = Mathf.Max(0f, frameScissor.xMin - pad), y0 = Mathf.Max(0f, frameScissor.yMin - pad);
+                float x1 = Mathf.Min(width, frameScissor.xMax + pad), y1 = Mathf.Min(height, frameScissor.yMax + pad);
+                maskScissor = new Rect(x0, y0, x1 - x0, y1 - y0);
+            }
+
             // --- текстуры кадра ---
             int samples = ResolveEdgeSamples(width, height);
             var maskDesc = new TextureDesc(width, height)
@@ -253,7 +267,7 @@ namespace Exerussus.Outline.Rendering
                 format = GraphicsFormat.R8G8B8A8_UNorm,
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp,
-                clearBuffer = true,
+                clearBuffer = !scissorClear,
                 clearColor = Color.clear,
             };
             var mask = renderGraph.CreateTexture(maskDesc);
@@ -266,7 +280,7 @@ namespace Exerussus.Outline.Rendering
                 format = GraphicsFormat.R16G16B16A16_SFloat,
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp,
-                clearBuffer = true,
+                clearBuffer = !scissorClear,
                 clearColor = Color.clear,
             };
             var pos = surface ? renderGraph.CreateTexture(posDesc) : TextureHandle.nullHandle;
@@ -275,7 +289,7 @@ namespace Exerussus.Outline.Rendering
             {
                 name = "_OutlineMaskDepth",
                 format = SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil),
-                clearBuffer = true,
+                clearBuffer = !scissorClear,
             };
 
             var seedDesc = new TextureDesc(fieldW, fieldH)
@@ -320,13 +334,14 @@ namespace Exerussus.Outline.Rendering
                     posMsDesc.bindTextureMS = true;
                     posMS = renderGraph.CreateTexture(posMsDesc);
                 }
-                RecordMask(renderGraph, resourceData, maskMS, maskDepthMS, posMS);
-                RecordResolve(renderGraph, maskMS, mask, posMS, pos, samples, frameScissor);
+                RecordMask(renderGraph, resourceData, maskMS, maskDepthMS, posMS, maskScissor);
+                // резолв пишет каждый пиксель прямоугольника — обычной маске очистка не нужна
+                RecordResolve(renderGraph, maskMS, mask, posMS, pos, samples, maskScissor);
             }
             else
             {
                 var maskDepth = renderGraph.CreateTexture(depthDesc);
-                RecordMask(renderGraph, resourceData, mask, maskDepth, pos);
+                RecordMask(renderGraph, resourceData, mask, maskDepth, pos, maskScissor);
             }
 
             var frame = new FrameConsts
@@ -405,7 +420,7 @@ namespace Exerussus.Outline.Rendering
                         format = GraphicsFormat.R16G16B16A16_SFloat,
                         filterMode = FilterMode.Point,
                         wrapMode = TextureWrapMode.Clamp,
-                        clearBuffer = true,
+                        clearBuffer = !scissorClear,
                         clearColor = Color.clear,
                     };
                     frame.ObjectColor = renderGraph.CreateTexture(objDesc);
@@ -413,9 +428,9 @@ namespace Exerussus.Outline.Rendering
                     {
                         name = "_OutlineObjectDepth",
                         format = SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil),
-                        clearBuffer = true,
+                        clearBuffer = !scissorClear,
                     });
-                    RecordObjectColor(renderGraph, frame.ObjectColor, objDepth);
+                    RecordObjectColor(renderGraph, frame.ObjectColor, objDepth, maskScissor);
                 }
             }
 
@@ -527,7 +542,12 @@ namespace Exerussus.Outline.Rendering
                     if (subCount <= 0)
                         continue;
 
-                    AccumulateBounds(camera, r.bounds, pixelRect, sx, sy);
+                    // MeshRenderer: углы локальных bounds в мире — у повёрнутого объекта прямоугольник заметно
+                    // теснее, чем у мирового AABB; у SkinnedMeshRenderer локальные bounds живут в корневой кости
+                    if (r is MeshRenderer)
+                        AccumulateBounds(camera, r.localBounds, r.localToWorldMatrix, pixelRect, sx, sy);
+                    else
+                        AccumulateBounds(camera, r.bounds, Matrix4x4.identity, pixelRect, sx, sy);
 
                     r.GetSharedMaterials(_materialScratch);
                     int matCount = Mathf.Max(1, _materialScratch.Count);
@@ -543,7 +563,7 @@ namespace Exerussus.Outline.Rendering
             return _draws.Count > 0;
         }
 
-        private void AccumulateBounds(Camera camera, Bounds b, Rect pixelRect, float sx, float sy)
+        private void AccumulateBounds(Camera camera, Bounds b, in Matrix4x4 toWorld, Rect pixelRect, float sx, float sy)
         {
             if (_boundsUnbounded)
                 return;
@@ -556,7 +576,7 @@ namespace Exerussus.Outline.Rendering
                     c.x + ((k & 1) != 0 ? e.x : -e.x),
                     c.y + ((k & 2) != 0 ? e.y : -e.y),
                     c.z + ((k & 4) != 0 ? e.z : -e.z));
-                var sp = camera.WorldToScreenPoint(corner);
+                var sp = camera.WorldToScreenPoint(toWorld.MultiplyPoint3x4(corner));
                 if (sp.z <= near)
                 {
                     // угол за камерой — проекция ненадёжна, считаем на весь кадр
@@ -586,11 +606,13 @@ namespace Exerussus.Outline.Rendering
         }
 
         private void RecordMask(RenderGraph renderGraph, UniversalResourceData resourceData,
-            TextureHandle mask, TextureHandle maskDepth, TextureHandle pos)
+            TextureHandle mask, TextureHandle maskDepth, TextureHandle pos, Rect clearRect)
         {
             using var builder = renderGraph.AddRasterRenderPass<MaskPassData>("Outline Mask", out var data, _maskSampler);
 
             data.Draws = _draws;
+            data.ClearRect = clearRect;
+            data.ClearMaterial = _jfaMaterial;
 
             var sceneDepth = resourceData.cameraDepthTexture;
             bool hasDepth = sceneDepth.IsValid();
@@ -610,6 +632,7 @@ namespace Exerussus.Outline.Rendering
             builder.SetRenderFunc(static (MaskPassData d, RasterGraphContext ctx) =>
             {
                 ctx.cmd.SetGlobalVector(OutlineShaderIds.MaskGlobals, d.Globals);
+                ClearScissored(ctx.cmd, d.ClearRect, d.ClearMaterial);
                 if (d.Surface)
                 {
                     ctx.cmd.SetGlobalFloatArray(OutlineShaderIds.MaskObjectSpace, d.ObjectSpace);
@@ -685,6 +708,8 @@ namespace Exerussus.Outline.Rendering
         {
             public List<DrawItem> Draws;
             public OutlineGpuTables Tables;
+            public Rect ClearRect;
+            public Material ClearMaterial;
         }
 
         private void RecordBackgroundCopy(RenderGraph renderGraph, TextureHandle source, TextureHandle target, Rect scissor)
@@ -709,11 +734,13 @@ namespace Exerussus.Outline.Rendering
         /// Скрытые объекты (прозрачность) их собственными материалами — проход UniversalForward, освещение
         /// кадра берётся из глобальных данных URP.
         /// </summary>
-        private void RecordObjectColor(RenderGraph renderGraph, TextureHandle target, TextureHandle depth)
+        private void RecordObjectColor(RenderGraph renderGraph, TextureHandle target, TextureHandle depth, Rect clearRect)
         {
             using var builder = renderGraph.AddRasterRenderPass<ObjectColorPassData>("Outline Object Color", out var data, _maskSampler);
             data.Draws = _draws;
             data.Tables = _tables;
+            data.ClearRect = clearRect;
+            data.ClearMaterial = _jfaMaterial;
             builder.UseAllGlobalTextures(true);
             builder.SetRenderAttachment(target, 0, AccessFlags.Write);
             builder.SetRenderAttachmentDepth(depth, AccessFlags.Write);
@@ -721,6 +748,7 @@ namespace Exerussus.Outline.Rendering
             builder.AllowGlobalStateModification(true);
             builder.SetRenderFunc(static (ObjectColorPassData d, RasterGraphContext ctx) =>
             {
+                ClearScissored(ctx.cmd, d.ClearRect, d.ClearMaterial);
                 var draws = d.Draws;
                 for (int i = 0; i < draws.Count; i++)
                 {
@@ -735,6 +763,16 @@ namespace Exerussus.Outline.Rendering
                     ctx.cmd.DrawRenderer(item.Renderer, item.Source, item.Submesh, pass);
                 }
             });
+        }
+
+        /// <summary>Очистить привязанные цели (цвет и глубину) только в прямоугольнике; пустой — ничего не делать.</summary>
+        private static void ClearScissored(RasterCommandBuffer cmd, Rect rect, Material material)
+        {
+            if (rect.width <= 0f || rect.height <= 0f)
+                return;
+            cmd.EnableScissorRect(rect);
+            cmd.DrawProcedural(Matrix4x4.identity, material, OutlineShaderIds.PassClear, MeshTopology.Triangles, 3, 1);
+            cmd.DisableScissorRect();
         }
 
         private sealed class UploadPassData

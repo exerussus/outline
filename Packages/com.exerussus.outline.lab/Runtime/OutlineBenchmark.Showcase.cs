@@ -32,6 +32,7 @@ namespace Exerussus.Outline.Lab
         {
             public string Name;
             public OutlineStyle Style; // null — база без подсветки
+            public Action<Rendering.OutlineSettings> Tweak; // правка настроек фичи на время замера
             public float Avg;
             public float P95;
             public float Cpu;
@@ -152,6 +153,37 @@ namespace Exerussus.Outline.Lab
                 _tempStyles.Add(st);
                 _items.Add(new ShowcaseItem { Name = $"паттерн {p}", Style = st });
             }
+            // разложение постоянной цены: пустой стиль (запись есть, рисовать нечего) и варианты настроек
+            var empty = ScriptableObject.CreateInstance<OutlineStyle>();
+            empty.hideFlags = HideFlags.HideAndDontSave;
+            empty.name = "Empty";
+            empty.outerColor = new Color(1f, 1f, 1f, 0f);
+            empty.outerWidth = 1f;
+            empty.innerColor = new Color(1f, 1f, 1f, 0f);
+            _tempStyles.Add(empty);
+            _items.Add(new ShowcaseItem { Name = "пустой стиль", Style = empty });
+            _items.Add(new ShowcaseItem { Name = "пустой, без сглаживания", Style = empty,
+                Tweak = st => { st.edgeAntialiasing = Rendering.OutlineEdgeAA.Off; st.edgeAntialiasingWebGL = Rendering.OutlineEdgeAA.Off; } });
+            _items.Add(new ShowcaseItem { Name = "пустой, без scissor", Style = empty, Tweak = st => st.scissor = false });
+
+            OutlineStyle probe = null;
+            foreach (var s in showcaseStyles)
+            {
+                if (s != null && s.name.EndsWith("Selected"))
+                    probe = s;
+            }
+            if (probe != null)
+            {
+                _items.Add(new ShowcaseItem { Name = "Selected, без сглаживания", Style = probe,
+                    Tweak = st => { st.edgeAntialiasing = Rendering.OutlineEdgeAA.Off; st.edgeAntialiasingWebGL = Rendering.OutlineEdgeAA.Off; } });
+                _items.Add(new ShowcaseItem { Name = "Selected, поле ×0.25", Style = probe,
+                    Tweak = st => { st.autoFieldScale = false; st.fieldScale = 0.25f; st.fieldScaleWebGL = 0.25f; } });
+                _items.Add(new ShowcaseItem { Name = "Selected, поле ×1", Style = probe,
+                    Tweak = st => { st.autoFieldScale = false; st.fieldScale = 1f; st.fieldScaleWebGL = 1f; } });
+                _items.Add(new ShowcaseItem { Name = "Selected, без стыка", Style = probe, Tweak = st => st.seamBlend = 0f });
+                _items.Add(new ShowcaseItem { Name = "Selected, без scissor", Style = probe, Tweak = st => st.scissor = false });
+            }
+
             _items.Add(new ShowcaseItem { Name = "без подсветки (повтор)" });
         }
 
@@ -161,6 +193,9 @@ namespace Exerussus.Outline.Lab
             _count = 0;
             _lastStats = default;
             _itemHandle.Hide();
+            JsonUtility.FromJsonOverwrite(_savedSettings, feature.settings);
+            feature.settings.debugView = Rendering.OutlineDebugView.None;
+            _items[index].Tweak?.Invoke(feature.settings);
             var style = _items[index].Style;
             if (style != null)
                 _itemHandle = OutlineApi.Show(showcaseObject.gameObject, style, OutlineOptions.InGroup(1, 0f));
@@ -225,7 +260,7 @@ namespace Exerussus.Outline.Lab
                 var tex = ScreenCapture.CaptureScreenshotAsTexture();
                 try
                 {
-                    string name = _items[index].Name.Replace(' ', '_');
+                    string name = _items[index].Name.Replace(' ', '_').Replace(",", "").Replace('×', 'x');
                     File.WriteAllBytes(Path.Combine(_shotDir, $"S{index:00}_{name}.png"), tex.EncodeToPNG());
                     _shotCount++;
                 }

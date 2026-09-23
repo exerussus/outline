@@ -32,5 +32,6 @@ namespace Exerussus.Outline.Rendering
         public const int PassStep = 1;
         public const int PassInitDual = 2;
         public const int PassStepDual = 3;
+        public const int PassClear = 4;
     }
 }
