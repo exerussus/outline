@@ -6,7 +6,8 @@
 // (наложение на стыке); сиды своей группы хранятся со штрафом — только чтобы не рвать распространение поля.
 // Внутреннее поле (_OutlineSeedsInner): обычное расстояние до ближайшего края (для внутреннего контура).
 //
-// Проходы: 0 Init, 1 Step — только внешнее поле; 2 InitDual, 3 StepDual — оба поля (MRT).
+// Проходы: 0 Init, 1 Step — только внешнее поле; 2 InitDual, 3 StepDual — оба поля (MRT);
+// 4 Clear — очистка цвета (до двух целей) и глубины прямоугольником scissor вместо очистки всей текстуры.
 Shader "Hidden/Exerussus/Outline/JumpFlood"
 {
     SubShader
@@ -247,6 +248,31 @@ Shader "Hidden/Exerussus/Outline/JumpFlood"
                 int step = (int)_OutlineParams.y;
                 o.outer = StepOuter(pf, step);
                 o.inner = StepInner(pf, step);
+                return o;
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "Clear"
+            ZTest Always
+            ZWrite On
+            HLSLPROGRAM
+            #pragma vertex OutlineFullscreenVert
+            #pragma fragment Frag
+            struct ClearOut
+            {
+                float4 c0 : SV_Target0;
+                float4 c1 : SV_Target1;
+                float depth : SV_Depth;
+            };
+            ClearOut Frag(OutlineVaryings input)
+            {
+                ClearOut o;
+                o.c0 = 0;
+                o.c1 = 0;
+                o.depth = UNITY_RAW_FAR_CLIP_VALUE;
                 return o;
             }
             ENDHLSL
