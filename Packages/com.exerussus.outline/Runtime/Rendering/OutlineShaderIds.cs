@@ -16,6 +16,15 @@ namespace Exerussus.Outline.Rendering
         public static readonly int MaskSize = Shader.PropertyToID("_OutlineMaskSize");
         public static readonly int SeedSize = Shader.PropertyToID("_OutlineSeedSize");
         public static readonly int Params = Shader.PropertyToID("_OutlineParams");
+        public static readonly int MaskMS = Shader.PropertyToID("_OutlineMaskMS");
+        public static readonly int ResolveParams = Shader.PropertyToID("_OutlineResolveParams");
+        public static readonly int Background = Shader.PropertyToID("_OutlineBg");
+        public static readonly int ObjectColor = Shader.PropertyToID("_OutlineObjColor");
+        public static readonly int Ramp = Shader.PropertyToID("_OutlineRamp");
+        public static readonly int TexArray = Shader.PropertyToID("_OutlineTexArray");
+        public static readonly int Pos = Shader.PropertyToID("_OutlinePos");
+        public static readonly int PosMS = Shader.PropertyToID("_OutlinePosMS");
+        public static readonly int MaskObjectSpace = Shader.PropertyToID("_OutlineMaskObjectSpace");
         public static readonly int MaskGlobals = Shader.PropertyToID("_OutlineMaskGlobals");
 
         // проходы шейдера JumpFlood

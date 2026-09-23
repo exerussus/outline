@@ -1,30 +1,31 @@
 namespace Exerussus.Outline.Rendering
 {
-    /// <summary>
-    /// Статистика последнего кадра подсветки. GPU-время — из ProfilingSampler (сумма за прошлый кадр
-    /// по всем камерам, включая Scene View); на платформах без GPU-рекордера (WebGL) будет 0.
-    /// </summary>
+    /// <summary>Статистика последнего кадра подсветки игровой камеры.</summary>
     public readonly struct OutlineStats
     {
         public readonly bool Rendered;
         public readonly int ActiveEntries;
         public readonly int DrawCalls;
+        /// <summary>Проходы поля: init + шаги JFA.</summary>
         public readonly int JfaPasses;
         public readonly bool DualField;
         public readonly int FieldWidth;
         public readonly int FieldHeight;
-        /// <summary>Фактический масштаб поля (с учётом авто-разрешения).</summary>
+        /// <summary>Фактический масштаб поля.</summary>
         public readonly float FieldScale;
         /// <summary>Доля поля, реально обсчитываемая после кропа (0..1).</summary>
         public readonly float Coverage;
-        public readonly float MaskGpuMs;
-        public readonly float JfaGpuMs;
-        public readonly float CompositeGpuMs;
+        /// <summary>Стоимость поля: пиксели поля в области × проходы (двойной проход — ×2).</summary>
+        public readonly long FieldCost;
+        /// <summary>Бюджет стоимости поля из настроек.</summary>
+        public readonly long FieldBudget;
+        /// <summary>Сэмплов маски (1 — без сглаживания края).</summary>
+        public readonly int EdgeSamples;
+        /// <summary>Время записи Render Graph на CPU, мс.</summary>
         public readonly float CpuMs;
 
         public OutlineStats(bool rendered, int activeEntries, int drawCalls, int jfaPasses, bool dualField,
-            int fieldWidth, int fieldHeight, float fieldScale, float coverage, float maskGpuMs, float jfaGpuMs, float compositeGpuMs,
-            float cpuMs)
+            int fieldWidth, int fieldHeight, float fieldScale, float coverage, long fieldCost, long fieldBudget, int edgeSamples, float cpuMs)
         {
             Rendered = rendered;
             ActiveEntries = activeEntries;
@@ -35,12 +36,10 @@ namespace Exerussus.Outline.Rendering
             FieldHeight = fieldHeight;
             FieldScale = fieldScale;
             Coverage = coverage;
-            MaskGpuMs = maskGpuMs;
-            JfaGpuMs = jfaGpuMs;
-            CompositeGpuMs = compositeGpuMs;
+            FieldCost = fieldCost;
+            FieldBudget = fieldBudget;
+            EdgeSamples = edgeSamples;
             CpuMs = cpuMs;
         }
-
-        public float TotalGpuMs => MaskGpuMs + JfaGpuMs + CompositeGpuMs;
     }
 }

@@ -3,8 +3,7 @@
 //
 // Внешнее поле (_OutlineSeeds): взвешенное сравнение d / ширина_записи - приоритет, чтобы разные
 // ширины и приоритеты не обрезали друг друга. Пиксель ВНУТРИ объекта принимает сиды только чужих групп
-// с приоритетом ≥ своего (наложение на стыке); прочие кандидаты хранятся со штрафом — только
-// чтобы не рвать распространение поля.
+// (наложение на стыке); сиды своей группы хранятся со штрафом — только чтобы не рвать распространение поля.
 // Внутреннее поле (_OutlineSeedsInner): обычное расстояние до ближайшего края (для внутреннего контура).
 //
 // Проходы: 0 Init, 1 Step — только внешнее поле; 2 InitDual, 3 StepDual — оба поля (MRT).
@@ -99,11 +98,9 @@ Shader "Hidden/Exerussus/Outline/JumpFlood"
             bool overlay = _OutlineParams2.x > 0.5;
             float2 pc = OutlineFieldToFrame(pf);
             float selfGroup = 0;
-            float selfPrio = 0;
             if (selfId != 0u)
             {
                 selfGroup = OutlineEntryGroup(selfId);
-                selfPrio = OutlineEntryPrio(selfId);
             }
 
             float bestScore = 1e20;
@@ -135,9 +132,8 @@ Shader "Hidden/Exerussus/Outline/JumpFlood"
 
                     if (selfId != 0u)
                     {
-                        bool valid = overlay
-                            && OutlineEntryGroup(id) != selfGroup
-                            && prio >= selfPrio;
+                        // чужая группа любого приоритета: с меньшим композит гасит свечение вглубь силуэта
+                        bool valid = overlay && OutlineEntryGroup(id) != selfGroup;
                         if (!valid)
                             score += OL_INVALID_PENALTY;
                     }

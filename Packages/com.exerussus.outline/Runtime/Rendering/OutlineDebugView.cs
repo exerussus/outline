@@ -10,5 +10,7 @@ namespace Exerussus.Outline.Rendering
         Seeds = 2,
         /// <summary>Поле расстояния: полосы каждые 8 px, снаружи тёплые, внутри холодные.</summary>
         Distance = 3,
+        /// <summary>Цвет скрытых объектов в режиме прозрачности (проход Object Color), пурпурный — пусто.</summary>
+        ObjectColor = 4,
     }
 }

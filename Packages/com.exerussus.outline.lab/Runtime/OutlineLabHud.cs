@@ -35,6 +35,11 @@ namespace Exerussus.Outline.Lab
 
         private void Update()
         {
+            if (_view != null)
+            {
+                bool hide = benchmark != null && benchmark.HideOverlay;
+                _view.style.display = hide ? DisplayStyle.None : DisplayStyle.Flex;
+            }
             _frameMsAccum += Time.unscaledDeltaTime * 1000f;
             _frames++;
             if (_view == null || feature == null || Time.unscaledTime < _nextRefresh)
@@ -45,8 +50,7 @@ namespace Exerussus.Outline.Lab
             _frameMsAccum = 0f;
             _frames = 0;
             var st = feature.settings;
-            string extra = $"\nкадр {frameMs:0.0} мс ({(frameMs > 0f ? 1000f / frameMs : 0f):0} fps) · кроп {(st.cropToBounds ? "вкл" : "выкл")}{(st.scissor ? "+scissor" : "")} · авто-поле {(st.autoFieldScale ? $"вкл, бюджет {st.gpuBudgetMs:0.0} мс" : "выкл")}" +
-                           (Application.isEditor ? "\nGPU-время суммируется по всем камерам — закройте Scene View для чистых цифр" : "");
+            string extra = $"\nкадр {frameMs:0.0} мс ({(frameMs > 0f ? 1000f / frameMs : 0f):0} fps) · кроп {(st.cropToBounds ? "вкл" : "выкл")}{(st.scissor ? "+scissor" : "")} · поле {(st.autoFieldScale ? "авто" : "фикс.")}";
             if (benchmark != null && benchmark.IsRunning)
                 extra += "\n" + benchmark.Status;
             _view.SetStats(feature.Stats, extra);

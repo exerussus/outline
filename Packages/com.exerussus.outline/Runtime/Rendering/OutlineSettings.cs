@@ -12,14 +12,25 @@ namespace Exerussus.Outline.Rendering
         public RenderPassEvent passEvent = RenderPassEvent.BeforeRenderingPostProcessing;
 
         [Header("Качество (Desktop)")]
-        [Range(0.25f, 1f), Tooltip("Разрешение поля расстояния относительно кадра. 1 — точные тонкие линии.")]
+        [Range(0.25f, 1f), Tooltip("Разрешение поля расстояний относительно кадра. При авто — верхняя граница.")]
         public float fieldScale = 1f;
-        [Tooltip("Дополнительный проход JFA с шагом 1 (JFA+1) — чище на стыках.")]
-        public bool extraPass = true;
+        [Tooltip("Дополнительный проход JFA с шагом 1. Чуть чище на стыках, ~20% стоимости поля.")]
+        public bool extraPass = false;
+        [Tooltip("Авто: брать наибольший масштаб поля, при котором стоимость (пиксели поля × проходы) укладывается в бюджет.")]
+        public bool autoFieldScale = true;
+        [Min(1000), Tooltip("Бюджет поля: пиксели поля × проходы JFA за кадр.")]
+        public int fieldBudget = 450000;
+        [Tooltip("Сглаживание края силуэта: число сэмплов маски. Край и заливка перекрытой части становятся гладкими.")]
+        public OutlineEdgeAA edgeAntialiasing = OutlineEdgeAA.X4;
 
         [Header("Качество (WebGL)")]
         [Range(0.25f, 1f)] public float fieldScaleWebGL = 0.5f;
         public bool extraPassWebGL = false;
+        [Min(1000)] public int fieldBudgetWebGL = 200000;
+        public OutlineEdgeAA edgeAntialiasingWebGL = OutlineEdgeAA.Off;
+
+        [Tooltip("Нижняя граница авто-масштаба поля.")]
+        [Range(0.25f, 1f)] public float minFieldScale = 0.25f;
 
         [Header("Ширина")]
         [Min(1f), Tooltip("Жёсткий потолок ширины, px. Определяет максимум проходов JFA.")]
@@ -31,9 +42,9 @@ namespace Exerussus.Outline.Rendering
         [Header("Стык групп")]
         [Min(0f), Tooltip("Сколько «ширин» даёт одна единица приоритета на стыке групп.")]
         public float priorityScale = 0.25f;
-        [Tooltip("Свечение группы с приоритетом ≥ рисуется поверх силуэта чужой группы (контур на стыке).")]
+        [Tooltip("Свечение соседней группы заходит на силуэт: с приоритетом ≥ своего — целиком, с меньшим — гаснет вглубь на радиусе стыка.")]
         public bool seamOverlay = true;
-        [Min(0f), Tooltip("Радиус мягкого смешения цветов, где встречаются свечения разных записей, px. 0 — резкая граница.")]
+        [Min(0f), Tooltip("Радиус стыка, px: смешение цветов, где встречаются свечения разных записей, и затухание свечения группы с меньшим приоритетом внутри чужого силуэта. 0 — резкая граница.")]
         public float seamBlend = 6f;
 
         [Header("Оптимизация")]
@@ -41,13 +52,6 @@ namespace Exerussus.Outline.Rendering
         public bool cropToBounds = true;
         [Tooltip("Отсекать растеризацию прямоугольником (scissor), а не только ранним выходом в шейдере — экономит заливку и запись.")]
         public bool scissor = true;
-        [Tooltip("Экспериментально: подстраивать разрешение поля под бюджет GPU по ProfilingSampler. " +
-                 "GPU-рекордер в редакторе даёт недостоверные значения; на WebGL не работает.")]
-        public bool autoFieldScale = false;
-        [Min(0.1f), Tooltip("Бюджет GPU на всю подсветку, мс.")]
-        public float gpuBudgetMs = 1.5f;
-        [Range(0.25f, 1f), Tooltip("Нижняя граница авто-разрешения поля.")]
-        public float minFieldScale = 0.375f;
 
         [Header("Маска")]
         [Min(0f), Tooltip("Допуск сравнения с глубиной сцены, мировые единицы (+0.2% от дистанции).")]
@@ -61,6 +65,8 @@ namespace Exerussus.Outline.Rendering
 
         public float EffectiveFieldScale => IsWebGL ? fieldScaleWebGL : fieldScale;
         public bool EffectiveExtraPass => IsWebGL ? extraPassWebGL : extraPass;
+        public int EffectiveFieldBudget => IsWebGL ? fieldBudgetWebGL : fieldBudget;
+        public int EffectiveEdgeSamples => (int)(IsWebGL ? edgeAntialiasingWebGL : edgeAntialiasing);
 
         private static bool IsWebGL => Application.platform == RuntimePlatform.WebGLPlayer;
     }
