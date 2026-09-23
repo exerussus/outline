@@ -58,6 +58,9 @@ namespace Exerussus.Outline.Rendering
         public float occlusionBias = 0.02f;
         [Range(0f, 1f), Tooltip("Порог альфы для прозрачных материалов в режиме Auto.")]
         public float transparentCutoff = 0.1f;
+        [Tooltip("Цвет объекта в режиме прозрачности: Simple — упрощённое освещение по текстуре и цвету материала (работает всегда), " +
+                 "SourceMaterial — исходный материал объекта (точное освещение; может не рисоваться с GPU Resident Drawer).")]
+        public OutlineObjectColorMode objectColor = OutlineObjectColorMode.Simple;
 
         [Header("Отладка")]
         public OutlineDebugView debugView = OutlineDebugView.None;

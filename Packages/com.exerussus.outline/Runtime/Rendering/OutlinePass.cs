@@ -710,6 +710,7 @@ namespace Exerussus.Outline.Rendering
             public OutlineGpuTables Tables;
             public Rect ClearRect;
             public Material ClearMaterial;
+            public bool Simple;
         }
 
         private void RecordBackgroundCopy(RenderGraph renderGraph, TextureHandle source, TextureHandle target, Rect scissor)
@@ -741,6 +742,7 @@ namespace Exerussus.Outline.Rendering
             data.Tables = _tables;
             data.ClearRect = clearRect;
             data.ClearMaterial = _jfaMaterial;
+            data.Simple = _settings.objectColor == OutlineObjectColorMode.Simple;
             builder.UseAllGlobalTextures(true);
             builder.SetRenderAttachment(target, 0, AccessFlags.Write);
             builder.SetRenderAttachmentDepth(depth, AccessFlags.Write);
@@ -753,8 +755,14 @@ namespace Exerussus.Outline.Rendering
                 for (int i = 0; i < draws.Count; i++)
                 {
                     var item = draws[i];
-                    if (item.Renderer == null || item.Source == null || !d.Tables.IsSeeThrough(item.Entry))
+                    if (item.Renderer == null || !d.Tables.IsSeeThrough(item.Entry))
                         continue;
+                    if (d.Simple || item.Source == null)
+                    {
+                        // материал-двойник маски, проход 1 — упрощённое освещение
+                        ctx.cmd.DrawRenderer(item.Renderer, item.Material, item.Submesh, 1);
+                        continue;
+                    }
                     int pass = item.Source.FindPass("UniversalForward");
                     if (pass < 0)
                         pass = item.Source.FindPass("UniversalForwardOnly");
