@@ -34,6 +34,29 @@ Shader "Hidden/Exerussus/Outline/Composite"
             TEXTURE2D(_OutlineBg);        // копия цвета камеры (объекты в режиме прозрачности в ней не нарисованы)
             TEXTURE2D(_OutlineObjColor);  // цвет скрытых объектов их материалами (a — есть объект)
 
+            // Доля растворения записи: из стиля/эффекта или (по fade) 1 - fade
+            float DissolveAmount(uint id)
+            {
+                float4 dis = OutlineData(id, OL_COL_DISSOLVE);
+                float amount = dis.x;
+                if (dis.w > 0.5)
+                    amount = max(amount, 1.0 - OutlineData(id, OL_COL_MISC).x);
+                return amount;
+            }
+
+            // Растворение в точке p: keep — сколько осталось (0..1), edge — светящаяся кромка
+            void DissolveTerms(uint id, float2 q, float amount, out float keep, out float edge)
+            {
+                float4 dis = OutlineData(id, OL_COL_DISSOLVE);
+                float n = OutlineFbm(q / max(dis.y, 1e-4));
+                // при amount = 1 порог выше максимума шума — растворено целиком
+                float thr = amount * 1.05;
+                keep = smoothstep(thr - 0.02, thr + 0.02, n);
+                edge = (dis.z > 0.0 && amount < 0.999)
+                    ? (1.0 - smoothstep(thr, thr + max(dis.z, 1e-3), n)) * keep
+                    : 0.0;
+            }
+
             // Основа пикселя записи в режиме прозрачности/маскировки: фон за объектом с искажением и
             // преломлением у края, поверх — сам объект с непрозрачностью, тинт, мерцание края.
             // edgeDist — расстояние до края внутрь, edgeSeed — ближайший граничный пиксель (px кадра).
@@ -69,9 +92,26 @@ Shader "Hidden/Exerussus/Outline/Composite"
 
                 // сам объект: при fade → 0 возвращается к полной непрозрачности (плавный вход и выход)
                 float opacity = lerp(1.0, st.y, fade);
+
+                // растворение режет сам объект: на растворённых участках — фон, по кромке — свечение
+                float keep = 1.0;
+                float edge = 0.0;
+                float dissolve = DissolveAmount(id);
+                if (dissolve > 0.0)
+                {
+                    float2 q;
+                    float pxSize;
+                    float3 pos;
+                    bool hasPos;
+                    OutlineSpaceCoords(id, p, true, q, pxSize, pos, hasPos);
+                    DissolveTerms(id, q, dissolve, keep, edge);
+                }
+
                 float4 obj = LOAD_TEXTURE2D(_OutlineObjColor, uint2(p));
                 if (obj.a > 0.0)
-                    col = lerp(col, obj.rgb, saturate(opacity));
+                    col = lerp(col, obj.rgb, saturate(opacity) * keep);
+                float4 ec = OutlineData(id, OL_COL_DISSOLVE_EDGE);
+                col += ec.rgb * ec.a * edge;
 
                 float4 sh = OutlineData(id, OL_COL_SHIMMER);
                 if (sh.a > 0.0)
@@ -230,15 +270,6 @@ Shader "Hidden/Exerussus/Outline/Composite"
                 return res;
             }
 
-            // Доля растворения записи: из стиля или (по fade) 1 - fade
-            float DissolveAmount(uint id)
-            {
-                float4 dis = OutlineData(id, OL_COL_DISSOLVE);
-                float amount = dis.x;
-                if (dis.w > 0.5)
-                    amount = max(amount, 1.0 - OutlineData(id, OL_COL_MISC).x);
-                return amount;
-            }
 
             // Слои внутри силуэта записи id (premultiplied, до эффектов записи):
             // заливка (+ текстура), внутренний контур, rim, сканер; растворение режет всё
@@ -289,7 +320,8 @@ Shader "Hidden/Exerussus/Outline/Composite"
                 {
                     float4 s2 = OutlineData(id, OL_COL_SCAN2);
                     float4 s3 = OutlineData(id, OL_COL_SCAN3);
-                    float coord = hasPos ? dot(pos, s2.xyz) : dot(q, normalize(s2.xy + float2(0.0, 1e-5)));
+                    // по плоскости развёртки: для поверхности y — высота на боковых гранях, x — горизонталь
+                    float coord = dot(q, normalize(s2.xy + float2(0.0, 1e-5)));
                     float period = max(s2.w, 1e-4);
                     float d = abs(frac(coord / period - time * s3.z) - 0.5) * period;
                     float band = 1.0 - smoothstep(s3.x * 0.5, s3.x * 0.5 + max(s3.y, pxSize), d);
@@ -298,20 +330,17 @@ Shader "Hidden/Exerussus/Outline/Composite"
                     acc.a = saturate(acc.a + scan.a * band * 0.5);
                 }
 
-                // растворение: шумовой порог + светящаяся кромка
+                // растворение: шумовой порог + светящаяся кромка (для прозрачных записей кромку рисует основа)
                 if (dissolve > 0.0)
                 {
-                    float4 dis = OutlineData(id, OL_COL_DISSOLVE);
-                    float n = OutlineFbm(q / max(dis.y, 1e-4));
-                    // при amount = 1 порог выше максимума шума — растворено целиком
-                    float thr = dissolve * 1.05;
-                    float aa = 0.02;
-                    float keep = smoothstep(thr - aa, thr + aa, n);
-                    float edge = (1.0 - smoothstep(thr, thr + max(dis.z, 1e-3), n)) * keep;
-                    float4 ec = OutlineData(id, OL_COL_DISSOLVE_EDGE);
+                    float keep, edge;
+                    DissolveTerms(id, q, dissolve, keep, edge);
                     acc *= keep;
-                    if (dis.z > 0.0 && dissolve < 0.999)
+                    if (OutlineData(id, OL_COL_SEETHRU).x < 0.5)
+                    {
+                        float4 ec = OutlineData(id, OL_COL_DISSOLVE_EDGE);
                         acc = float4(acc.rgb + ec.rgb * ec.a * edge, saturate(acc.a + ec.a * edge));
+                    }
                 }
                 return acc;
             }

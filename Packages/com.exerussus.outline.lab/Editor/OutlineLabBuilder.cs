@@ -121,7 +121,7 @@ namespace Exerussus.Outline.Lab.Editor
             effectsView.SetPositionAndRotation(new Vector3(0.8f, 4f, 3f), Quaternion.Euler(32f, 0f, 0f));
 
             // витрина бенчмарка: отдельный объект вдали от сцены, столбик перед ним — для перекрытой части
-            var showFloor = Primitive(PrimitiveType.Plane, "Showcase Floor", new Vector3(30f, 0f, 0f), Vector3.one * 0.6f, grey, false);
+            var showFloor = Primitive(PrimitiveType.Plane, "Showcase Floor", new Vector3(30f, 0f, 1f), new Vector3(1.1f, 1f, 0.9f), grey, false);
             showFloor.layer = IgnoreRaycastLayer;
             var showcase = Primitive(PrimitiveType.Cube, "Showcase Cube", new Vector3(30f, 0.7f, 0f), Vector3.one, blue, false);
             showcase.transform.rotation = Quaternion.Euler(0f, 30f, 0f);
@@ -132,7 +132,47 @@ namespace Exerussus.Outline.Lab.Editor
             var showcaseView = new GameObject("ShowcaseView").transform;
             showcaseView.SetPositionAndRotation(new Vector3(30f, 1.55f, -2.1f), Quaternion.Euler(20f, 0f, 0f));
 
-            CreateHud(feature, cam, effectsView, showcase.transform, showcaseView);
+            // сетка 7×3 разных фигур вокруг куба (куб — в центре переднего ряда); трио — куб и два соседа
+            var crowd = new Transform[21];
+            var trio = new Transform[3];
+            var gridShapes = new[] { PrimitiveType.Sphere, PrimitiveType.Capsule, PrimitiveType.Cylinder, PrimitiveType.Cube };
+            int n = 0;
+            for (int row = 0; row < 3; row++)
+            {
+                for (int col = 0; col < 7; col++)
+                {
+                    Transform tr;
+                    if (row == 0 && col == 3)
+                    {
+                        tr = showcase.transform;
+                    }
+                    else
+                    {
+                        var type = gridShapes[(row * 7 + col) % gridShapes.Length];
+                        float h = type == PrimitiveType.Capsule || type == PrimitiveType.Cylinder ? 0.8f : 0.45f;
+                        var go = Primitive(type, $"Showcase Shape {row}-{col}", new Vector3(30f + (col - 3) * 1.3f, h, row * 1.5f),
+                            Vector3.one * 0.8f, (row + col) % 2 == 0 ? grey : blue, false);
+                        go.transform.rotation = Quaternion.Euler(0f, 17f * n, 0f);
+                        go.layer = IgnoreRaycastLayer;
+                        tr = go.transform;
+                    }
+                    crowd[n++] = tr;
+                    if (row == 0 && col >= 2 && col <= 4)
+                        trio[col - 2] = tr;
+                }
+            }
+            var trioView = new GameObject("ShowcaseView x3").transform;
+            trioView.SetPositionAndRotation(new Vector3(30f, 2.1f, -3.9f), Quaternion.Euler(20f, 0f, 0f));
+            var crowdView = new GameObject("ShowcaseView x21").transform;
+            crowdView.SetPositionAndRotation(new Vector3(30f, 6.2f, -5.2f), Quaternion.Euler(45f, 0f, 0f));
+
+            var tiers = new[]
+            {
+                ("1 объект", showcaseView, new[] { showcase.transform }),
+                ("3 объекта", trioView, trio),
+                ("21 объект", crowdView, crowd),
+            };
+            CreateHud(feature, cam, effectsView, tiers);
 
             var demo = cam.gameObject.AddComponent<OutlineLabDemo>();
             var demoSo = new SerializedObject(demo);
@@ -177,7 +217,7 @@ namespace Exerussus.Outline.Lab.Editor
         }
 
         private static void CreateHud(OutlineRendererFeature feature, Camera cam, Transform effectsView,
-            Transform showcase, Transform showcaseView)
+            (string name, Transform view, Transform[] objects)[] tiers)
         {
             string path = $"{Generated}/LabPanelSettings.asset";
             var panel = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.PanelSettings>(path);
@@ -202,8 +242,18 @@ namespace Exerussus.Outline.Lab.Editor
             bso.FindProperty("feature").objectReferenceValue = feature;
             bso.FindProperty("viewCamera").objectReferenceValue = cam;
             bso.FindProperty("effectsView").objectReferenceValue = effectsView;
-            bso.FindProperty("showcaseObject").objectReferenceValue = showcase;
-            bso.FindProperty("showcaseView").objectReferenceValue = showcaseView;
+            var tiersProp = bso.FindProperty("showcaseTiers");
+            tiersProp.arraySize = tiers.Length;
+            for (int t = 0; t < tiers.Length; t++)
+            {
+                var el = tiersProp.GetArrayElementAtIndex(t);
+                el.FindPropertyRelative("name").stringValue = tiers[t].name;
+                el.FindPropertyRelative("view").objectReferenceValue = tiers[t].view;
+                var objs = el.FindPropertyRelative("objects");
+                objs.arraySize = tiers[t].objects.Length;
+                for (int i = 0; i < tiers[t].objects.Length; i++)
+                    objs.GetArrayElementAtIndex(i).objectReferenceValue = tiers[t].objects[i];
+            }
             // витрина: служебные стили, первый ряд, эффекты
             var names = new System.Collections.Generic.List<string> { "Hover", "Selected", "Enemy", "Ghost", "WorldThin" };
             names.AddRange(OutlineStylePresets.Gallery);

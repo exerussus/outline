@@ -33,7 +33,18 @@ namespace Exerussus.Outline.Rendering
         private readonly Texture2DArray _dummyArray;
         private readonly OutlineGpuTables _tables = new();
         private readonly MaterialPropertyBlock _mpb = new();
-        private readonly List<DrawItem> _draws = new(256);
+        // списки отрисовки по слоям; _draws — список текущего слоя
+        private readonly List<DrawItem>[] _layerDraws =
+        {
+            new(128), new(32), new(32), new(32),
+        };
+        private List<DrawItem> _draws;
+        private readonly Vector4[] _layerBounds = new Vector4[OutlineApi.MaxLayers];
+        private readonly bool[] _layerUnbounded = new bool[OutlineApi.MaxLayers];
+        private readonly float[] _layerAutoScale = new float[OutlineApi.MaxLayers];
+        private readonly int[] _layerUpFrames = new int[OutlineApi.MaxLayers];
+        // рендереры с идущим растворением OutlineFx: эффект объекта — остальные слои их не рисуют
+        private readonly HashSet<Renderer> _dissolving = new();
         private readonly List<Material> _materialScratch = new(8);
 
         private readonly ProfilingSampler _maskSampler = new("Outline Mask");
@@ -148,6 +159,7 @@ namespace Exerussus.Outline.Rendering
             };
             _dummyArray.SetPixels(new[] { Color.white }, 0);
             _dummyArray.Apply(false, true);
+            _draws = _layerDraws[0];
             profilingSampler = new ProfilingSampler("Outline");
             ConfigureInput(ScriptableRenderPassInput.Depth);
             // маска и композит работают в пикселях одной ориентации — пишем только в промежуточную цель
@@ -201,6 +213,67 @@ namespace Exerussus.Outline.Rendering
                 return;
             }
 
+            // слои рисуются по порядку: каждый — своя маска, поле и композит поверх предыдущих
+            var agg = new LayerStats();
+            for (int layer = 0; layer < OutlineApi.MaxLayers; layer++)
+            {
+                if (_layerDraws[layer].Count == 0)
+                    continue;
+                _draws = _layerDraws[layer];
+                _screenBounds = _layerBounds[layer];
+                _boundsUnbounded = _layerUnbounded[layer];
+                _autoScale = _layerAutoScale[layer];
+                _upFrames = _layerUpFrames[layer];
+                _tables.SetLayer(layer);
+                RecordLayer(renderGraph, resourceData, cameraData, width, height, now, ref agg);
+                _layerAutoScale[layer] = _autoScale;
+                _layerUpFrames[layer] = _upFrames;
+            }
+            _draws = _layerDraws[0];
+            _tables.SetLayer(0);
+
+            if (agg.Layers == 0)
+            {
+                StoreStats(cameraData, default);
+                return;
+            }
+            float cpuMs = (Stopwatch.GetTimestamp() - t0) * 1000f / Stopwatch.Frequency;
+            StoreStats(cameraData, new OutlineStats(true, _tables.ActiveCount, agg.Draws, agg.Passes, agg.Dual,
+                agg.FieldW, agg.FieldH, agg.FieldScale, agg.Coverage, agg.Cost, _settings.EffectiveFieldBudget,
+                agg.Samples, cpuMs, agg.Layers));
+        }
+
+        /// <summary>Сводка статистики по отрисованным слоям.</summary>
+        private struct LayerStats
+        {
+            public int Layers, Draws, Passes, FieldW, FieldH, Samples;
+            public bool Dual;
+            public float FieldScale, Coverage;
+            public long Cost;
+
+            public void Add(int draws, int passes, bool dual, int fieldW, int fieldH, float fieldScale, float coverage, long cost, int samples)
+            {
+                // размер и масштаб поля — у первого отрисованного слоя, остальное суммируется
+                if (Layers == 0)
+                {
+                    FieldW = fieldW;
+                    FieldH = fieldH;
+                    FieldScale = fieldScale;
+                    Samples = samples;
+                }
+                Layers++;
+                Draws += draws;
+                Passes += passes;
+                Dual |= dual;
+                Coverage = Mathf.Max(Coverage, coverage);
+                Cost += cost;
+            }
+        }
+
+        /// <summary>Конвейер одного слоя: маска, поле, композит. false — слою нечего рисовать в кадре.</summary>
+        private bool RecordLayer(RenderGraph renderGraph, UniversalResourceData resourceData, UniversalCameraData cameraData,
+            int width, int height, float now, ref LayerStats agg)
+        {
             // --- область работы в пикселях кадра (x0, y0, x1, y1) ---
             var area = new Vector4(0, 0, width, height);
             if (_settings.cropToBounds && !_boundsUnbounded)
@@ -212,8 +285,7 @@ namespace Exerussus.Outline.Rendering
                 area.w = Mathf.Clamp(Mathf.Ceil(_screenBounds.w + pad), 0, height);
                 if (area.z <= area.x || area.w <= area.y)
                 {
-                    StoreStats(cameraData, default);
-                    return; // всё подсвеченное вне кадра и вне досягаемости свечения
+                    return false; // всё подсвеченное слоя вне кадра и вне досягаемости свечения
                 }
             }
 
@@ -272,12 +344,12 @@ namespace Exerussus.Outline.Rendering
             };
             var mask = renderGraph.CreateTexture(maskDesc);
 
-            // позиции поверхности для паттернов Surface*: half-float, xyz + ось нормали
+            // координаты развёртки поверхности для паттернов Surface*: RG16F
             bool surface = _tables.NeedsSurface;
             var posDesc = new TextureDesc(width, height)
             {
                 name = "_OutlinePos",
-                format = GraphicsFormat.R16G16B16A16_SFloat,
+                format = GraphicsFormat.R16G16_SFloat,
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp,
                 clearBuffer = !scissorClear,
@@ -440,10 +512,10 @@ namespace Exerussus.Outline.Rendering
                 outerCur, dual ? innerCur : outerCur, frame, 0f, (float)_settings.debugView, frameScissor);
 
             float coverage = (rect.z - rect.x) * (rect.w - rect.y) / (fieldW * (float)fieldH);
-            float cpuMs = (Stopwatch.GetTimestamp() - t0) * 1000f / Stopwatch.Frequency;
-            StoreStats(cameraData, new OutlineStats(true, _tables.ActiveCount, _draws.Count, passes + 1, dual,
-                fieldW, fieldH, fieldScale, coverage, cost, _settings.EffectiveFieldBudget, samples, cpuMs));
+            agg.Add(_draws.Count, passes + 1, dual, fieldW, fieldH, fieldScale, coverage, cost, samples);
+            return true;
         }
+
 
         // статистику храним только для игровых камер — Scene View не должен перетирать цифры HUD
         private void StoreStats(UniversalCameraData cameraData, in OutlineStats stats)
@@ -509,13 +581,32 @@ namespace Exerussus.Outline.Rendering
         /// </summary>
         private bool BuildDrawList(Camera camera, int targetWidth, int targetHeight)
         {
-            _draws.Clear();
             _maskMaterials.TrimIfNeeded();
+            for (int l = 0; l < OutlineApi.MaxLayers; l++)
+            {
+                _layerDraws[l].Clear();
+                _layerBounds[l] = new Vector4(float.MaxValue, float.MaxValue, float.MinValue, float.MinValue);
+                _layerUnbounded[l] = false;
+            }
+
+            // растворение OutlineFx — эффект объекта: пока идёт, другие записи этого рендерера не рисуются
+            _dissolving.Clear();
+            float now = OutlineClock.Now;
+            for (int id = 1; id < OutlineApi.SlotCount; id++)
+            {
+                if (!_tables.IsActive(id) || OutlineApi.EvaluateDissolve(id, now) < 0f)
+                    continue;
+                int rc = OutlineApi.GetRendererCount(id);
+                for (int i = 0; i < rc; i++)
+                {
+                    var r = OutlineApi.GetRenderer(id, i);
+                    if (r != null)
+                        _dissolving.Add(r);
+                }
+            }
             int cullingMask = camera.cullingMask;
             float transparentCutoff = _settings.transparentCutoff;
 
-            _screenBounds = new Vector4(float.MaxValue, float.MaxValue, float.MinValue, float.MinValue);
-            _boundsUnbounded = false;
             var pixelRect = camera.pixelRect;
             float sx = targetWidth / Mathf.Max(1f, pixelRect.width);
             float sy = targetHeight / Mathf.Max(1f, pixelRect.height);
@@ -525,6 +616,9 @@ namespace Exerussus.Outline.Rendering
                 if (!_tables.IsActive(id))
                     continue;
 
+                int layer = OutlineApi.GetLayer(id);
+                var draws = _layerDraws[layer];
+                bool isDissolve = OutlineApi.EvaluateDissolve(id, now) >= 0f;
                 var mode = OutlineApi.GetAlphaMode(id);
                 float threshold = OutlineApi.GetAlphaThreshold(id);
                 int count = OutlineApi.GetRendererCount(id);
@@ -537,6 +631,9 @@ namespace Exerussus.Outline.Rendering
                         continue;
                     if (!OutlineApi.IsOwner(r, id))
                         continue;
+                    // растворённые OutlineFx объекты скрыты; растворяющиеся рисует только их эффект
+                    if (OutlineFx.IsRendererHidden(r) || (!isDissolve && _dissolving.Contains(r)))
+                        continue;
 
                     int subCount = SubmeshCount(r);
                     if (subCount <= 0)
@@ -544,10 +641,14 @@ namespace Exerussus.Outline.Rendering
 
                     // MeshRenderer: углы локальных bounds в мире — у повёрнутого объекта прямоугольник заметно
                     // теснее, чем у мирового AABB; у SkinnedMeshRenderer локальные bounds живут в корневой кости
+                    _screenBounds = _layerBounds[layer];
+                    _boundsUnbounded = _layerUnbounded[layer];
                     if (r is MeshRenderer)
                         AccumulateBounds(camera, r.localBounds, r.localToWorldMatrix, pixelRect, sx, sy);
                     else
                         AccumulateBounds(camera, r.bounds, Matrix4x4.identity, pixelRect, sx, sy);
+                    _layerBounds[layer] = _screenBounds;
+                    _layerUnbounded[layer] = _boundsUnbounded;
 
                     r.GetSharedMaterials(_materialScratch);
                     int matCount = Mathf.Max(1, _materialScratch.Count);
@@ -555,12 +656,17 @@ namespace Exerussus.Outline.Rendering
                     {
                         var src = m < _materialScratch.Count ? _materialScratch[m] : null;
                         var mat = _maskMaterials.Get(src, id, mode, threshold, transparentCutoff);
-                        _draws.Add(new DrawItem(r, mat, src, Mathf.Min(m, subCount - 1), id));
+                        draws.Add(new DrawItem(r, mat, src, Mathf.Min(m, subCount - 1), id));
                     }
                 }
             }
             _materialScratch.Clear();
-            return _draws.Count > 0;
+            for (int l = 0; l < OutlineApi.MaxLayers; l++)
+            {
+                if (_layerDraws[l].Count > 0)
+                    return true;
+            }
+            return false;
         }
 
         private void AccumulateBounds(Camera camera, Bounds b, in Matrix4x4 toWorld, Rect pixelRect, float sx, float sy)
