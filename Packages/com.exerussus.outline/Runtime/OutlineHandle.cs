@@ -22,6 +22,12 @@ namespace Exerussus.Outline
         public bool IsAlive => OutlineApi.IsAlive(this);
 
         public void SetStyle(OutlineStyle style) => OutlineApi.SetStyle(this, style);
+
+        /// <summary>Плавно сменить стиль за duration секунд.</summary>
+        public void SetStyle(OutlineStyle style, float duration) => OutlineApi.SetStyle(this, style, duration);
+
+        /// <summary>Идёт ли плавная смена стиля.</summary>
+        public bool IsStyleBlending => OutlineApi.IsStyleBlending(this);
         public void SetGroup(int group) => OutlineApi.SetGroup(this, group);
         public void SetPriority(int priority) => OutlineApi.SetPriority(this, priority);
 

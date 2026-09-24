@@ -37,6 +37,9 @@ namespace Exerussus.Outline.Lab
         private Quaternion _homeRot;
         private bool _atEffects;
         private OutlinePatternSpace _initialPatternSpace;
+        [SerializeField, Min(0f), Tooltip("Длительность плавной смены стиля выделенных (клавиша T), с.")]
+        private float styleTransition = 0.4f;
+        private bool _swapped;
 
         private void Awake()
         {
@@ -119,6 +122,16 @@ namespace Exerussus.Outline.Lab
                     OutlineFx.Pulse(picked);
                 if (keyboard.fKey.wasPressedThisFrame)
                     OutlineFx.Flash(picked, new Color(2.5f, 2.5f, 2.5f, 0.8f));
+            }
+            // плавная смена стиля у всех выделенных: выделение ↔ враг
+            if (keyboard.tKey.wasPressedThisFrame && selectedStyle != null && enemyStyle != null)
+            {
+                _swapped = !_swapped;
+                foreach (var pair in _selected)
+                {
+                    var h = pair.Value;
+                    h.SetStyle(_swapped ? enemyStyle : selectedStyle, styleTransition);
+                }
             }
             if (feature != null)
             {

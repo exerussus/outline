@@ -47,6 +47,10 @@ namespace Exerussus.Outline
         private static readonly float[] s_DisTo = new float[SlotCount];
         private static readonly float[] s_DisStart = new float[SlotCount];
         private static readonly float[] s_DisDuration = new float[SlotCount];
+        // плавная смена стиля: прежний стиль и время перехода; s_PrevStyle == null — перехода нет
+        private static readonly OutlineStyle[] s_PrevStyle = new OutlineStyle[SlotCount];
+        private static readonly float[] s_StyleStart = new float[SlotCount];
+        private static readonly float[] s_StyleDuration = new float[SlotCount];
         private static readonly List<Renderer>[] s_Renderers = CreateRendererLists();
 
         // владение рендерером — отдельно в каждом слое
@@ -114,6 +118,7 @@ namespace Exerussus.Outline
             s_FadeDuration[slot] = Mathf.Max(0f, options.fadeIn);
             s_HideAt[slot] = -1f;
             s_DisDuration[slot] = -1f;
+            s_PrevStyle[slot] = null;
             s_AliveCount++;
 
             var list = s_Renderers[slot];
@@ -138,7 +143,71 @@ namespace Exerussus.Outline
         public static void SetStyle(in OutlineHandle h, OutlineStyle style)
         {
             if (IsAlive(h) && style != null)
+            {
                 s_Style[h.Slot] = style;
+                s_PrevStyle[h.Slot] = null;
+            }
+        }
+
+        /// <summary>
+        /// Плавно сменить стиль за duration секунд: цвета, ширины и параметры эффектов смешиваются,
+        /// дискретные (тип паттерна, режим перекрытого, текстуры) переключаются на середине.
+        /// Смена посреди перехода начинает новый от стиля, который сейчас преобладает.
+        /// </summary>
+        public static void SetStyle(in OutlineHandle h, OutlineStyle style, float duration)
+        {
+            if (!IsAlive(h) || style == null)
+                return;
+            int s = h.Slot;
+            var current = s_Style[s];
+            if (ReferenceEquals(current, style) && duration > 0f)
+                return; // уже идём к этому стилю — переход не сбрасываем
+            if (duration <= 0f || current == null)
+            {
+                SetStyle(h, style);
+                return;
+            }
+            float now = OutlineClock.Now;
+            var prev = s_PrevStyle[s];
+            if (prev != null && now - s_StyleStart[s] >= s_StyleDuration[s])
+                prev = null;
+            if (prev != null && ReferenceEquals(prev, style))
+            {
+                // разворот посреди перехода: продолжаем с той же точки в обратную сторону
+                // (smoothstep симметричен: s(1 - x) = 1 - s(x))
+                float x = Mathf.Clamp01((now - s_StyleStart[s]) / Mathf.Max(1e-4f, s_StyleDuration[s]));
+                s_PrevStyle[s] = current;
+                s_Style[s] = style;
+                s_StyleDuration[s] = duration;
+                s_StyleStart[s] = now - (1f - x) * duration;
+                return;
+            }
+            bool prevDominates = prev != null && EvaluateStyleBlend(s, now, out _) < 0.5f;
+            s_PrevStyle[s] = prevDominates ? prev : current;
+            s_Style[s] = style;
+            s_StyleStart[s] = now;
+            s_StyleDuration[s] = duration;
+        }
+
+        /// <summary>Идёт ли у подсветки плавная смена стиля.</summary>
+        public static bool IsStyleBlending(in OutlineHandle h) =>
+            IsAlive(h) && EvaluateStyleBlend(h.Slot, OutlineClock.Now, out _) < 1f;
+
+        /// <summary>
+        /// Доля целевого стиля 0..1 (smoothstep) и прежний стиль; 1 и null — перехода нет.
+        /// </summary>
+        internal static float EvaluateStyleBlend(int slot, float now, out OutlineStyle prev)
+        {
+            prev = s_PrevStyle[slot];
+            if (prev == null)
+                return 1f;
+            float t = Mathf.Clamp01((now - s_StyleStart[slot]) / Mathf.Max(1e-4f, s_StyleDuration[slot]));
+            if (t >= 1f)
+            {
+                prev = null;
+                return 1f;
+            }
+            return t * t * (3f - 2f * t);
         }
 
         public static void SetGroup(in OutlineHandle h, int group)
@@ -292,8 +361,14 @@ namespace Exerussus.Outline
         internal static void Tick(float now)
         {
             for (int s = 1; s < SlotCount; s++)
-                if (s_Alive[s] && s_HideAt[s] >= 0f && now >= s_HideAt[s])
+            {
+                if (!s_Alive[s])
+                    continue;
+                if (s_HideAt[s] >= 0f && now >= s_HideAt[s])
                     Release(s);
+                else if (s_PrevStyle[s] != null && now - s_StyleStart[s] >= s_StyleDuration[s])
+                    s_PrevStyle[s] = null;
+            }
         }
 
         // ------------------------------------------------------------------ Внутреннее
@@ -337,6 +412,7 @@ namespace Exerussus.Outline
             s_Alive[slot] = false;
             s_Version[slot]++;
             s_Style[slot] = null;
+            s_PrevStyle[slot] = null;
             s_AliveCount--;
 
             for (int i = 0; i < list.Count; i++)
@@ -377,6 +453,7 @@ namespace Exerussus.Outline
                 s_Alive[s] = false;
                 s_Version[s]++;
                 s_Style[s] = null;
+                s_PrevStyle[s] = null;
                 s_Renderers[s].Clear();
             }
             s_RendererRefs.Clear();

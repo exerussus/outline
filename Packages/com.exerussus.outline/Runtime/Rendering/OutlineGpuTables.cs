@@ -61,6 +61,30 @@ namespace Exerussus.Outline.Rendering
         private readonly float[] _surfaceObjectSpace = new float[Rows];
         private readonly bool[] _seeThrough = new bool[Rows];
 
+        // параметры текущего кадра (камера, масштабы) — общие для всех записей
+        private struct FrameContext
+        {
+            public Camera Camera;
+            public OutlineSettings Settings;
+            public bool Linear;
+            public float ResScale;
+            public float MaxWidth;
+            public bool Ortho;
+            public float PxPerUnitK;
+            public Vector3 CamPos;
+            public Vector3 CamFwd;
+            public int Width;
+            public int Height;
+            public float Now;
+        }
+        private FrameContext _f;
+
+        // строки для плавной смены стиля
+        private readonly float[] _rowPrev = new float[Columns * 4];
+        private readonly float[] _rowCur = new float[Columns * 4];
+        private readonly byte[] _lutPrev = new byte[LutWidth * 2];
+        private readonly ushort[] _rampPrev = new ushort[LutWidth * 2 * 4];
+
         public Texture Data => _data;
 
         /// <summary>Попала ли запись в текущий кадр (жива, есть стиль, fade > 0).</summary>
@@ -165,18 +189,23 @@ namespace Exerussus.Outline.Rendering
             Array.Clear(_lActive, 0, _lActive.Length);
             _textures.BeginFrame();
 
-            bool linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
-            float resScale = settings.scaleWithResolution ? targetHeight / settings.referenceHeight : 1f;
-            float maxWidth = settings.maxWidth * resScale;
+            _f.Camera = camera;
+            _f.Settings = settings;
+            _f.Linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
+            _f.ResScale = settings.scaleWithResolution ? targetHeight / settings.referenceHeight : 1f;
+            _f.MaxWidth = settings.maxWidth * _f.ResScale;
+            _f.Width = targetWidth;
+            _f.Height = targetHeight;
+            _f.Now = now;
 
             // пикселей на мировую единицу: ортографика — константа, перспектива — делим на глубину
-            bool ortho = camera.orthographic;
-            float pxPerUnitK = ortho
+            _f.Ortho = camera.orthographic;
+            _f.PxPerUnitK = _f.Ortho
                 ? targetHeight / (2f * Mathf.Max(1e-4f, camera.orthographicSize))
                 : targetHeight / (2f * Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad));
             var camTr = camera.transform;
-            Vector3 camPos = camTr.position;
-            Vector3 camFwd = camTr.forward;
+            _f.CamPos = camTr.position;
+            _f.CamFwd = camTr.forward;
 
             bool lutDirty = false;
             int active = 0;
@@ -193,140 +222,39 @@ namespace Exerussus.Outline.Rendering
                 if (fade <= 1e-4f)
                     continue;
                 int L = OutlineApi.GetLayer(id);
-
-                float unitScale = resScale;
-                if (style.widthMode == OutlineWidthMode.World)
-                {
-                    float depth = 1f;
-                    if (!ortho && OutlineApi.TryGetCenter(id, out var c))
-                        depth = Mathf.Max(camera.nearClipPlane, Vector3.Dot(c - camPos, camFwd));
-                    unitScale = ortho ? pxPerUnitK : pxPerUnitK / depth;
-                }
-
-                float outerPx = Mathf.Min(style.outerWidth * unitScale, maxWidth);
-                float innerPx = Mathf.Min(style.innerWidth * unitScale, maxWidth);
-                // огонь удлиняет свечение, дрожание сдвигает край — дальность поля и вес записи с запасом на них
-                float outerMaxPx = Mathf.Min(outerPx * (1f + style.pulseWidth) * (1f + style.fireAmount)
-                    + style.electricWobble * resScale, maxWidth);
-                bool hasOuter = style.outerColor.a > 0f && outerPx > 0f;
-                bool hasInner = style.innerColor.a > 0f && innerPx > 0f;
-
-                // без params-перегрузки Max — она аллоцирует массив
-                _lMaxRange[L] = Mathf.Max(_lMaxRange[L], Mathf.Max(hasOuter ? outerMaxPx : 0f, hasInner ? innerPx : 0f));
                 active++;
                 _lActive[L]++;
                 _active[id] = true;
-                _lNeedsInnerField[L] |= hasInner;
-                // растворение от временного эффекта (OutlineFx): запись становится прозрачной, объект — непрозрачным
-                float fxDissolve = OutlineApi.EvaluateDissolve(id, now);
-                bool fx = fxDissolve >= 0f;
-                bool seeThrough = style.seeThrough || fx;
-                float objectOpacity = fx ? 1f : style.objectOpacity;
-                float dissolveAmount = fx ? Mathf.Max(style.dissolve, fxDissolve) : style.dissolve;
-                if (seeThrough)
-                {
-                    _seeThrough[id] = true;
-                    _lNeedsBackground[L] = true;
-                    _lNeedsObjectColor[L] |= objectOpacity > 0f || fade < 0.999f;
-                    // преломление и мерцание считаются по расстоянию до края внутрь — нужно внутреннее поле
-                    if (style.refraction > 0f || style.edgeShimmer.a > 0f)
-                    {
-                        float w = Mathf.Min(style.refractionWidth * resScale, maxWidth);
-                        _lNeedsInnerField[L] = true;
-                        _lMaxInnerRange[L] = Mathf.Max(_lMaxInnerRange[L], w);
-                        _lMaxRange[L] = Mathf.Max(_lMaxRange[L], w);
-                    }
-                }
-                if (hasInner)
-                    _lMaxInnerRange[L] = Mathf.Max(_lMaxInnerRange[L], innerPx);
 
-                Put(id, ColOuter, ToShader(style.outerColor, linear));
-                Put(id, ColInner, ToShader(style.innerColor, linear));
-                Put(id, ColFill, ToShader(style.fillColor, linear));
-                Put(id, ColRim, ToShader(style.rimColor, linear));
-                Put(id, ColWidths, new Vector4(outerPx, innerPx, style.rimPower, OutlineApi.GetGroup(id)));
-                float priority = (style.priority + OutlineApi.GetPriority(id)) * settings.priorityScale;
-                Put(id, ColMisc, new Vector4(fade, style.additive, priority, (float)style.occludedMode));
-                Put(id, ColOcc, ToShader(style.occludedTint, linear));
-                Put(id, ColOcc2, new Vector4(style.dashPeriod * resScale, style.dashDuty, style.dashSpeed, style.occludedInnerMultiplier));
-                Put(id, ColPulse, new Vector4(style.pulseSpeed, style.pulseAlpha, style.pulseWidth, 0f));
-                // w: обратная ширина в пикселях кадра — вес записи в JFA (взвешенный Вороной);
-                // сиды хранят координаты кадра, поэтому от масштаба поля вес не зависит
-                float invOuterField = hasOuter ? 1f / Mathf.Max(0.5f, outerMaxPx) : 1e3f;
-                Put(id, ColNoise, new Vector4(style.noiseScale * resScale, style.noiseAmount, style.noiseSpeed, invOuterField));
-                _entries[id] = new Vector4(invOuterField, priority, OutlineApi.GetGroup(id), 1f);
-                var space = style.patternSpace;
-                float angle = style.patternAngle * Mathf.Deg2Rad;
-                // якорь (всегда: нужен и для эффектов по углу вокруг объекта): центр первого рендерера на экране,
-                // px кадра (y снизу, как SV_Position цели), и пикселей на мировую единицу на его глубине
-                var spaceData = new Vector4((float)space, targetWidth * 0.5f, targetHeight * 0.5f, 1f);
-                var anchorRenderer = OutlineApi.GetFirstRenderer(id);
-                if (anchorRenderer != null)
+                float blend = OutlineApi.EvaluateStyleBlend(id, now, out var prev);
+                if (prev != null && blend < 1f)
                 {
-                    var center = anchorRenderer.bounds.center;
-                    var vp = camera.WorldToViewportPoint(center);
-                    float depth = Mathf.Max(camera.nearClipPlane, vp.z);
-                    float pxPerUnit = ortho ? pxPerUnitK : pxPerUnitK / depth;
-                    spaceData = new Vector4((float)space, vp.x * targetWidth, vp.y * targetHeight, Mathf.Max(1e-3f, pxPerUnit));
-
-                    if (space == OutlinePatternSpace.Object)
-                    {
-                        // поворот объекта вокруг оси взгляда: куда на экране смотрит его ось X
-                        var tr = anchorRenderer.transform;
-                        float probe = Mathf.Max(0.01f, anchorRenderer.bounds.extents.magnitude);
-                        var vp2 = camera.WorldToViewportPoint(center + tr.right * probe);
-                        float dx = (vp2.x - vp.x) * targetWidth;
-                        float dy = (vp2.y - vp.y) * targetHeight;
-                        if (dx * dx + dy * dy > 1e-6f)
-                            angle -= Mathf.Atan2(dy, dx);
-                    }
+                    // плавная смена стиля: строка считается для обоих стилей и смешивается,
+                    // сводки слоя — объединение (поле и проходы нужны обоим)
+                    WriteEntry(id, prev, fade, L);
+                    Array.Copy(_dataBuf, id * Columns * 4, _rowPrev, 0, Columns * 4);
+                    var entryPrev = _entries[id];
+                    float surfPrev = _surfaceObjectSpace[id];
+                    WriteEntry(id, style, fade, L);
+                    BlendRow(id, blend);
+                    var entry = Vector4.LerpUnclamped(entryPrev, _entries[id], blend);
+                    entry.x = InvLerp(entryPrev.x, _entries[id].x, blend); // вес поля — по ширине, не по 1/ширине
+                    _entries[id] = entry;
+                    _dataBuf[(id * Columns + ColNoise) * 4 + 3] = entry.x;
+                    if (_seeThrough[id])
+                        _lNeedsObjectColor[L] = true; // непрозрачность объекта меняется во время перехода
+                    if (blend < 0.5f)
+                        _surfaceObjectSpace[id] = surfPrev;
+                    BlendLuts(id, prev, style, blend);
+                    _bakedStyle[id] = null; // по окончании перехода таблицы целевого стиля перепекутся
+                    lutDirty = true;
+                    continue;
                 }
 
-                bool surfaceSpace = space == OutlinePatternSpace.SurfaceObject || space == OutlinePatternSpace.SurfaceWorld;
-                bool usesSpace = style.pattern != OutlinePatternType.None || style.scanColor.a > 0f
-                    || dissolveAmount > 0f || style.dissolveByFade || (style.fillTexture != null && style.fillTextureStrength > 0f);
-                if (surfaceSpace && usesSpace)
-                {
-                    _lNeedsSurface[L] = true;
-                    _surfaceObjectSpace[id] = space == OutlinePatternSpace.SurfaceObject ? 1f : 0f;
-                }
-
-                // эффекты свечения и заливки
-                Put(id, ColGradient, new Vector4(style.useOuterGradient ? 1f : 0f, style.contourMix, style.contourSpeed, 0f));
-                Put(id, ColWave, new Vector4(style.wavePeriod * resScale, style.waveSpeed, style.waveDuty, style.waveStrength));
-                Put(id, ColMarch, new Vector4(style.marchCount, style.marchSpeed, style.marchDuty, style.marchStrength));
-                Put(id, ColFire, new Vector4(style.fireAmount, style.fireScale * resScale, style.fireSpeed, style.fireFlicker));
-                Put(id, ColElectric, new Vector4(style.electricWobble * resScale, style.electricScale * resScale, style.electricSpeed, style.electricArcs));
-                Put(id, ColSparkle, ToShader(style.sparkleColor, linear));
-                Put(id, ColSparkle2, new Vector4(style.sparkleDensity, style.sparkleSize * resScale, style.sparkleSpeed, 0f));
-                Put(id, ColScan, ToShader(style.scanColor, linear));
-                var scanDir = style.scanDirection.sqrMagnitude > 1e-8f ? style.scanDirection.normalized : Vector3.up;
-                Put(id, ColScan2, new Vector4(scanDir.x, scanDir.y, scanDir.z, style.scanPeriod));
-                Put(id, ColScan3, new Vector4(style.scanWidth, style.scanSoftness, style.scanSpeed, 0f));
-                Put(id, ColDissolve, new Vector4(dissolveAmount, style.dissolveScale, style.dissolveEdgeWidth, style.dissolveByFade ? 1f : 0f));
-                Put(id, ColDissolveEdge, ToShader(style.dissolveEdgeColor, linear));
-                int patternSlice = style.pattern == OutlinePatternType.Texture ? _textures.Request(style.patternTexture) : -1;
-                int fillSlice = style.fillTextureStrength > 0f ? _textures.Request(style.fillTexture) : -1;
-                Put(id, ColTextures, new Vector4(patternSlice, fillSlice, style.fillTextureTiling, style.fillTextureStrength));
-                Put(id, ColSeeThrough, new Vector4(seeThrough ? 1f : 0f, objectOpacity,
-                    style.distortion * resScale, style.distortionScale * resScale));
-                Put(id, ColSeeThrough2, new Vector4(style.distortionSpeed, style.refraction * resScale,
-                    style.refractionWidth * resScale, 0f));
-                Put(id, ColSeeTint, ToShader(style.seeThroughTint, linear));
-                Put(id, ColShimmer, ToShader(style.edgeShimmer, linear));
-
-                float period = space == OutlinePatternSpace.Screen ? style.patternScale * resScale : style.patternWorldScale;
-                Put(id, ColPattern, new Vector4((float)style.pattern, period, angle, style.patternSpeed));
-                Put(id, ColPatternSpace, spaceData);
-                Put(id, ColPattern2, new Vector4(style.patternFill, style.patternStrength,
-                    (float)(int)style.patternLayers, style.patternSoftness));
-
+                WriteEntry(id, style, fade, L);
                 if (!ReferenceEquals(_bakedStyle[id], style) || _bakedVersion[id] != style.Version)
                 {
-                    BakeCurve(style.outerCurve, id * 2);
-                    BakeCurve(style.innerCurve, id * 2 + 1);
-                    BakeGradient(style.outerGradient, id * 2, linear);
-                    BakeGradient(style.contourGradient, id * 2 + 1, linear);
+                    BakeStyle(style, id);
                     _bakedStyle[id] = style;
                     _bakedVersion[id] = style.Version;
                     lutDirty = true;
@@ -350,6 +278,241 @@ namespace Exerussus.Outline.Rendering
                 _ramp.Apply(false, false);
             }
             return true;
+        }
+
+        /// <summary>Строка данных записи и её вклад в сводки слоя.</summary>
+        private void WriteEntry(int id, OutlineStyle style, float fade, int L)
+        {
+            var camera = _f.Camera;
+            var settings = _f.Settings;
+            bool linear = _f.Linear;
+            float resScale = _f.ResScale;
+            float maxWidth = _f.MaxWidth;
+            bool ortho = _f.Ortho;
+            float pxPerUnitK = _f.PxPerUnitK;
+            Vector3 camPos = _f.CamPos;
+            Vector3 camFwd = _f.CamFwd;
+            int targetWidth = _f.Width;
+            int targetHeight = _f.Height;
+            float now = _f.Now;
+
+            float unitScale = resScale;
+            if (style.widthMode == OutlineWidthMode.World)
+            {
+                float depth = 1f;
+                if (!ortho && OutlineApi.TryGetCenter(id, out var c))
+                    depth = Mathf.Max(camera.nearClipPlane, Vector3.Dot(c - camPos, camFwd));
+                unitScale = ortho ? pxPerUnitK : pxPerUnitK / depth;
+            }
+
+            float outerPx = Mathf.Min(style.outerWidth * unitScale, maxWidth);
+            float innerPx = Mathf.Min(style.innerWidth * unitScale, maxWidth);
+            // огонь удлиняет свечение, дрожание сдвигает край — дальность поля и вес записи с запасом на них
+            float outerMaxPx = Mathf.Min(outerPx * (1f + style.pulseWidth) * (1f + style.fireAmount)
+                + style.electricWobble * resScale, maxWidth);
+            bool hasOuter = style.outerColor.a > 0f && outerPx > 0f;
+            bool hasInner = style.innerColor.a > 0f && innerPx > 0f;
+
+            // без params-перегрузки Max — она аллоцирует массив
+            _lMaxRange[L] = Mathf.Max(_lMaxRange[L], Mathf.Max(hasOuter ? outerMaxPx : 0f, hasInner ? innerPx : 0f));
+            _lNeedsInnerField[L] |= hasInner;
+            // растворение от временного эффекта (OutlineFx): запись становится прозрачной, объект — непрозрачным
+            float fxDissolve = OutlineApi.EvaluateDissolve(id, now);
+            bool fx = fxDissolve >= 0f;
+            bool seeThrough = style.seeThrough || fx;
+            float objectOpacity = fx ? 1f : style.objectOpacity;
+            float dissolveAmount = fx ? Mathf.Max(style.dissolve, fxDissolve) : style.dissolve;
+            if (seeThrough)
+            {
+                _seeThrough[id] = true;
+                _lNeedsBackground[L] = true;
+                _lNeedsObjectColor[L] |= objectOpacity > 0f || fade < 0.999f;
+                // преломление и мерцание считаются по расстоянию до края внутрь — нужно внутреннее поле
+                if (style.refraction > 0f || style.edgeShimmer.a > 0f)
+                {
+                    float w = Mathf.Min(style.refractionWidth * resScale, maxWidth);
+                    _lNeedsInnerField[L] = true;
+                    _lMaxInnerRange[L] = Mathf.Max(_lMaxInnerRange[L], w);
+                    _lMaxRange[L] = Mathf.Max(_lMaxRange[L], w);
+                }
+            }
+            if (hasInner)
+                _lMaxInnerRange[L] = Mathf.Max(_lMaxInnerRange[L], innerPx);
+
+            Put(id, ColOuter, ToShader(style.outerColor, linear));
+            Put(id, ColInner, ToShader(style.innerColor, linear));
+            Put(id, ColFill, ToShader(style.fillColor, linear));
+            Put(id, ColRim, ToShader(style.rimColor, linear));
+            Put(id, ColWidths, new Vector4(outerPx, innerPx, style.rimPower, OutlineApi.GetGroup(id)));
+            float priority = (style.priority + OutlineApi.GetPriority(id)) * settings.priorityScale;
+            Put(id, ColMisc, new Vector4(fade, style.additive, priority, (float)style.occludedMode));
+            Put(id, ColOcc, ToShader(style.occludedTint, linear));
+            Put(id, ColOcc2, new Vector4(style.dashPeriod * resScale, style.dashDuty, style.dashSpeed, style.occludedInnerMultiplier));
+            Put(id, ColPulse, new Vector4(style.pulseSpeed, style.pulseAlpha, style.pulseWidth, 0f));
+            // w: обратная ширина в пикселях кадра — вес записи в JFA (взвешенный Вороной);
+            // сиды хранят координаты кадра, поэтому от масштаба поля вес не зависит
+            float invOuterField = hasOuter ? 1f / Mathf.Max(0.5f, outerMaxPx) : 1e3f;
+            Put(id, ColNoise, new Vector4(style.noiseScale * resScale, style.noiseAmount, style.noiseSpeed, invOuterField));
+            _entries[id] = new Vector4(invOuterField, priority, OutlineApi.GetGroup(id), 1f);
+            var space = style.patternSpace;
+            float angle = style.patternAngle * Mathf.Deg2Rad;
+            // якорь (всегда: нужен и для эффектов по углу вокруг объекта): центр первого рендерера на экране,
+            // px кадра (y снизу, как SV_Position цели), и пикселей на мировую единицу на его глубине
+            var spaceData = new Vector4((float)space, targetWidth * 0.5f, targetHeight * 0.5f, 1f);
+            var anchorRenderer = OutlineApi.GetFirstRenderer(id);
+            if (anchorRenderer != null)
+            {
+                var center = anchorRenderer.bounds.center;
+                var vp = camera.WorldToViewportPoint(center);
+                float depth = Mathf.Max(camera.nearClipPlane, vp.z);
+                float pxPerUnit = ortho ? pxPerUnitK : pxPerUnitK / depth;
+                spaceData = new Vector4((float)space, vp.x * targetWidth, vp.y * targetHeight, Mathf.Max(1e-3f, pxPerUnit));
+
+                if (space == OutlinePatternSpace.Object)
+                {
+                    // поворот объекта вокруг оси взгляда: куда на экране смотрит его ось X
+                    var tr = anchorRenderer.transform;
+                    float probe = Mathf.Max(0.01f, anchorRenderer.bounds.extents.magnitude);
+                    var vp2 = camera.WorldToViewportPoint(center + tr.right * probe);
+                    float dx = (vp2.x - vp.x) * targetWidth;
+                    float dy = (vp2.y - vp.y) * targetHeight;
+                    if (dx * dx + dy * dy > 1e-6f)
+                        angle -= Mathf.Atan2(dy, dx);
+                }
+            }
+
+            bool surfaceSpace = space == OutlinePatternSpace.SurfaceObject || space == OutlinePatternSpace.SurfaceWorld;
+            bool usesSpace = style.pattern != OutlinePatternType.None || style.scanColor.a > 0f
+                || dissolveAmount > 0f || style.dissolveByFade || (style.fillTexture != null && style.fillTextureStrength > 0f);
+            if (surfaceSpace && usesSpace)
+            {
+                _lNeedsSurface[L] = true;
+                _surfaceObjectSpace[id] = space == OutlinePatternSpace.SurfaceObject ? 1f : 0f;
+            }
+
+            // эффекты свечения и заливки
+            Put(id, ColGradient, new Vector4(style.useOuterGradient ? 1f : 0f, style.contourMix, style.contourSpeed, 0f));
+            Put(id, ColWave, new Vector4(style.wavePeriod * resScale, style.waveSpeed, style.waveDuty, style.waveStrength));
+            Put(id, ColMarch, new Vector4(style.marchCount, style.marchSpeed, style.marchDuty, style.marchStrength));
+            Put(id, ColFire, new Vector4(style.fireAmount, style.fireScale * resScale, style.fireSpeed, style.fireFlicker));
+            Put(id, ColElectric, new Vector4(style.electricWobble * resScale, style.electricScale * resScale, style.electricSpeed, style.electricArcs));
+            Put(id, ColSparkle, ToShader(style.sparkleColor, linear));
+            Put(id, ColSparkle2, new Vector4(style.sparkleDensity, style.sparkleSize * resScale, style.sparkleSpeed, 0f));
+            Put(id, ColScan, ToShader(style.scanColor, linear));
+            var scanDir = style.scanDirection.sqrMagnitude > 1e-8f ? style.scanDirection.normalized : Vector3.up;
+            Put(id, ColScan2, new Vector4(scanDir.x, scanDir.y, scanDir.z, style.scanPeriod));
+            Put(id, ColScan3, new Vector4(style.scanWidth, style.scanSoftness, style.scanSpeed, 0f));
+            Put(id, ColDissolve, new Vector4(dissolveAmount, style.dissolveScale, style.dissolveEdgeWidth, style.dissolveByFade ? 1f : 0f));
+            Put(id, ColDissolveEdge, ToShader(style.dissolveEdgeColor, linear));
+            int patternSlice = style.pattern == OutlinePatternType.Texture ? _textures.Request(style.patternTexture) : -1;
+            int fillSlice = style.fillTextureStrength > 0f ? _textures.Request(style.fillTexture) : -1;
+            Put(id, ColTextures, new Vector4(patternSlice, fillSlice, style.fillTextureTiling, style.fillTextureStrength));
+            Put(id, ColSeeThrough, new Vector4(seeThrough ? 1f : 0f, objectOpacity,
+                style.distortion * resScale, style.distortionScale * resScale));
+            Put(id, ColSeeThrough2, new Vector4(style.distortionSpeed, style.refraction * resScale,
+                style.refractionWidth * resScale, 0f));
+            Put(id, ColSeeTint, ToShader(style.seeThroughTint, linear));
+            Put(id, ColShimmer, ToShader(style.edgeShimmer, linear));
+            if (!seeThrough)
+            {
+                // нейтральные значения: плавная смена стиля между обычным и прозрачным идёт через них
+                Put(id, ColSeeThrough, new Vector4(0f, 1f, 0f, 1f));
+                Put(id, ColSeeThrough2, Vector4.zero);
+                Put(id, ColSeeTint, new Vector4(1f, 1f, 1f, 0f));
+                Put(id, ColShimmer, Vector4.zero);
+            }
+
+            float period = space == OutlinePatternSpace.Screen ? style.patternScale * resScale : style.patternWorldScale;
+            Put(id, ColPattern, new Vector4((float)style.pattern, period, angle, style.patternSpeed));
+            Put(id, ColPatternSpace, spaceData);
+            Put(id, ColPattern2, new Vector4(style.patternFill, style.patternStrength,
+                (float)(int)style.patternLayers, style.patternSoftness));
+        }
+
+        // смешать строку записи (сейчас в ней целевой стиль) с сохранённой строкой прежнего стиля
+        private void BlendRow(int id, float t)
+        {
+            int o = id * Columns * 4;
+            Array.Copy(_dataBuf, o, _rowCur, 0, Columns * 4);
+            for (int i = 0; i < Columns * 4; i++)
+                _dataBuf[o + i] = Mathf.LerpUnclamped(_rowPrev[i], _rowCur[i], t);
+
+            // дискретные значения не смешиваются — переключаются на середине перехода
+            bool target = t >= 0.5f;
+            Pick(o, ColMisc * 4 + 3, target);         // режим перекрытого
+            Pick(o, ColDissolve * 4 + 3, target);     // растворение по fade
+            Pick(o, ColTextures * 4 + 1, target);     // срез текстуры заливки (сила заливки смешивается)
+
+            // паттерн другого вида (тип, пространство, слои, текстура): прежний гаснет к середине,
+            // новый разгорается после — берём столбцы целиком и масштабируем силу
+            bool samePattern = _rowPrev[ColPatternSpace * 4] == _rowCur[ColPatternSpace * 4]
+                && _rowPrev[ColPattern * 4] == _rowCur[ColPattern * 4]
+                && _rowPrev[ColPattern2 * 4 + 2] == _rowCur[ColPattern2 * 4 + 2]
+                && _rowPrev[ColTextures * 4] == _rowCur[ColTextures * 4];
+            if (!samePattern)
+            {
+                for (int k = 0; k < 4; k++)
+                {
+                    Pick(o, ColPattern * 4 + k, target);
+                    Pick(o, ColPatternSpace * 4 + k, target);
+                    Pick(o, ColPattern2 * 4 + k, target);
+                }
+                Pick(o, ColTextures * 4, target);
+                _dataBuf[o + ColPattern2 * 4 + 1] *= Mathf.Abs(2f * t - 1f);
+            }
+
+            // градиент по ширине: у стиля без градиента строка градиента запечена его цветом (BlendLuts)
+            _dataBuf[o + ColGradient * 4] = Mathf.Max(_rowPrev[ColGradient * 4], _rowCur[ColGradient * 4]);
+            // прозрачность включена на всё время перехода; непрозрачность объекта плавно уходит к 1 у обычного стиля
+            _dataBuf[o + ColSeeThrough * 4] = Mathf.Max(_rowPrev[ColSeeThrough * 4], _rowCur[ColSeeThrough * 4]);
+        }
+
+        private static float InvLerp(float invA, float invB, float t) =>
+            1f / Mathf.Max(1e-4f, Mathf.LerpUnclamped(1f / invA, 1f / invB, t));
+
+        private void Pick(int o, int i, bool target) => _dataBuf[o + i] = target ? _rowCur[i] : _rowPrev[i];
+
+        // solidOuter: у стиля без градиента по ширине строка градиента — его цвет свечения (для смешивания)
+        private void BakeStyle(OutlineStyle style, int id, bool solidOuter = false)
+        {
+            BakeCurve(style.outerCurve, id * 2);
+            BakeCurve(style.innerCurve, id * 2 + 1);
+            if (solidOuter && !style.useOuterGradient)
+                BakeSolid(style.outerColor, id * 2, _f.Linear);
+            else
+                BakeGradient(style.outerGradient, id * 2, _f.Linear);
+            BakeGradient(style.contourGradient, id * 2 + 1, _f.Linear);
+        }
+
+        private void BakeSolid(Color c, int row, bool linear)
+        {
+            int o = row * LutWidth * 4;
+            var l = linear ? c.linear : c;
+            ushort r = Mathf.FloatToHalf(l.r), g = Mathf.FloatToHalf(l.g), b = Mathf.FloatToHalf(l.b), a = Mathf.FloatToHalf(1f);
+            for (int i = 0; i < LutWidth; i++)
+            {
+                _rampBuf[o + i * 4] = r;
+                _rampBuf[o + i * 4 + 1] = g;
+                _rampBuf[o + i * 4 + 2] = b;
+                _rampBuf[o + i * 4 + 3] = a;
+            }
+        }
+
+        // кривые и градиенты обоих стилей смешиваются построчно
+        private void BlendLuts(int id, OutlineStyle prev, OutlineStyle style, float t)
+        {
+            int lo = id * 2 * LutWidth;
+            int ro = id * 2 * LutWidth * 4;
+            bool gradient = prev.useOuterGradient || style.useOuterGradient;
+            BakeStyle(prev, id, gradient);
+            Array.Copy(_lutBuf, lo, _lutPrev, 0, _lutPrev.Length);
+            Array.Copy(_rampBuf, ro, _rampPrev, 0, _rampPrev.Length);
+            BakeStyle(style, id, gradient);
+            for (int i = 0; i < _lutPrev.Length; i++)
+                _lutBuf[lo + i] = (byte)(Mathf.Lerp(_lutPrev[i], _lutBuf[lo + i], t) + 0.5f);
+            for (int i = 0; i < _rampPrev.Length; i++)
+                _rampBuf[ro + i] = Mathf.FloatToHalf(Mathf.Lerp(
+                    Mathf.HalfToFloat(_rampPrev[i]), Mathf.HalfToFloat(_rampBuf[ro + i]), t));
         }
 
         public void Dispose()

@@ -76,7 +76,13 @@ namespace Exerussus.Outline
                     if (!OutlineApi.IsSlotAlive(id))
                         continue;
                     var style = OutlineApi.GetStyle(id);
-                    bool seeThrough = style != null && (style.seeThrough || OutlineApi.EvaluateDissolve(id, now) >= 0f);
+                    if (style == null)
+                        continue;
+                    // при плавной смене стиля объект прозрачен, пока прозрачен хоть один из стилей
+                    OutlineApi.EvaluateStyleBlend(id, now, out var prevStyle);
+                    bool prevSeeThrough = prevStyle != null && prevStyle.seeThrough;
+                    bool seeThrough = style.seeThrough || prevSeeThrough || OutlineApi.EvaluateDissolve(id, now) >= 0f;
+                    bool keepShadows = style.seeThrough ? style.seeThroughShadows : prevSeeThrough ? prevStyle.seeThroughShadows : style.seeThroughShadows;
                     if (!seeThrough || OutlineApi.EvaluateFade(id, now) <= 1e-4f)
                         continue;
                     int count = OutlineApi.GetRendererCount(id);
@@ -87,7 +93,7 @@ namespace Exerussus.Outline
                         {
                             s_Desired.Add(r);
                             if (!s_Hidden.ContainsKey(r))
-                                Hide(r, style.seeThroughShadows && Application.isPlaying);
+                                Hide(r, keepShadows && Application.isPlaying);
                         }
                     }
                 }
