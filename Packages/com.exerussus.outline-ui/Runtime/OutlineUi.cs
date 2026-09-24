@@ -36,7 +36,6 @@ namespace Exerussus.Outline.UI
         private static readonly float[] s_DisTo = new float[SlotCount];
         private static readonly float[] s_DisStart = new float[SlotCount];
         private static readonly float[] s_DisDuration = new float[SlotCount];
-        private static readonly int[] s_Bucket = new int[SlotCount];
         private static readonly FilterFunction[] s_Filter = new FilterFunction[SlotCount];
         private static readonly IVisualElementScheduledItem[] s_Ticker = new IVisualElementScheduledItem[SlotCount];
         private static readonly Action[] s_TickAction = CreateTickActions();
@@ -122,7 +121,7 @@ namespace Exerussus.Outline.UI
                 s_PrevStyle[s] = null;
             }
             s_Style[s] = style;
-            // дальность поля могла вырасти — нужен набор шагов JFA побольше и новые поля фильтра
+            // дальность поля могла вырасти — новые поля фильтра
             AssignFilter(s, style);
             RebuildFilters(s_Element[s]);
         }
@@ -286,9 +285,7 @@ namespace Exerussus.Outline.UI
         private static void AssignFilter(int slot, OutlineStyle style)
         {
             float reach = OutlineUiFilter.ReachPoints(style, s_PrevStyle[slot]);
-            int bucket = OutlineUiFilter.BucketFor(reach, s_Element[slot]);
-            s_Bucket[slot] = bucket;
-            var f = new FilterFunction(OutlineUiFilter.GetDefinition(bucket));
+            var f = new FilterFunction(OutlineUiFilter.GetDefinition());
             f.AddParameter(new FilterParameter(slot));
             f.AddParameter(new FilterParameter(reach));
             s_Filter[slot] = f;

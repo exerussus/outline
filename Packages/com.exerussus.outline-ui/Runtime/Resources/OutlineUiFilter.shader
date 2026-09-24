@@ -1,6 +1,6 @@
 // Проходы фильтра подсветки UI Toolkit (FilterFunctionDefinition собирается в OutlineUiFilter.cs):
-// 0 — сиды: внутри силуэта исходный цвет, снаружи «сида нет»; 1 — шаг JFA (шаг — _OlStep.x, задаётся на каждый
-// проход); 2 — сборка: исходный контент + заливка/внутренний контур/паттерны/сканер/растворение внутри,
+// 0 — расстояние по строке, 1 — по столбцу (точное евклидово расстояние до силуэта, не дальше R = _OlStep.x;
+// внутри силуэта — исходный цвет); 2 — сборка: исходный контент + заливка/внутренний контур/паттерны/сканер/растворение внутри,
 // свечение с эффектами снаружи. Выход premultiplied, как и вход.
 Shader "Hidden/Exerussus/OutlineUi/Filter"
 {
@@ -13,13 +13,14 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
 
         Pass
         {
-            Name "Seed"
+            Name "Horizontal"
             HLSLPROGRAM
             #pragma target 3.5
             #pragma vertex OlVert
             #pragma fragment Frag
             #include "OutlineUiFilter.hlsl"
 
+            // расстояние по строке до ближайшего пикселя силуэта (с поправкой на его покрытие)
             float4 Frag(OlVaryings i) : SV_Target
             {
                 OlRect r = OlMakeRect(i);
@@ -27,67 +28,63 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
                 float4 v = OlLoad(r, p);
                 if (OlOccupied(v))
                     return v;
-                return OlEncode(0, false);
+                int maxD = (int)min(_OlStep.x, 255.0);
+                float best = 1e5;
+                [loop]
+                for (int s = 1; s <= maxD; s++)
+                {
+                    if (s - 0.5 >= best)
+                        break;
+                    float4 a = OlLoad(r, p + float2(s, 0));
+                    if (OlOccupied(a))
+                        best = min(best, s - (saturate(a.a) - 0.5));
+                    float4 b = OlLoad(r, p - float2(s, 0));
+                    if (OlOccupied(b))
+                        best = min(best, s - (saturate(b.a) - 0.5));
+                }
+                return OlEncode(best, best <= _OlStep.x);
             }
             ENDHLSL
         }
 
         Pass
         {
-            Name "Step"
+            Name "Vertical"
             HLSLPROGRAM
             #pragma target 3.5
             #pragma vertex OlVert
             #pragma fragment Frag
             #include "OutlineUiFilter.hlsl"
 
+            // евклидово расстояние: минимум по столбцу из sqrt(dx² + dy²), dx — из прохода по строкам
             float4 Frag(OlVaryings i) : SV_Target
             {
                 OlRect r = OlMakeRect(i);
                 float2 p = OlPixel(i, r);
-                float4 self = OlLoad(r, p);
-                if (OlOccupied(self))
-                    return self;
-
-                float step = max(_OlStep.x, 1.0);
-                float2 best = 0;
-                bool has = OlDecode(self, best);
-                float bestD = has ? dot(best, best) : 1e20;
-                [unroll]
-                for (int y = -1; y <= 1; y++)
+                float4 v = OlLoad(r, p);
+                if (OlOccupied(v))
+                    return v;
+                float best = 1e5;
+                float dx;
+                if (OlDecode(v, dx))
+                    best = dx;
+                int maxD = (int)min(_OlStep.x, 255.0);
+                [loop]
+                for (int s = 1; s <= maxD; s++)
                 {
+                    if (s - 0.5 >= best)
+                        break;
                     [unroll]
-                    for (int x = -1; x <= 1; x++)
+                    for (int k = 0; k < 2; k++)
                     {
-                        if (x == 0 && y == 0)
-                            continue;
-                        float2 dq = float2(x, y) * step;
-                        float2 q = p + dq;
-                        if (any(q < 0.0) || any(q >= r.size))
-                            continue;
-                        float4 n = OlLoad(r, q);
-                        float2 cand;
+                        float4 n = OlLoad(r, p + float2(0, k == 0 ? s : -s));
                         if (OlOccupied(n))
-                        {
-                            cand = dq;
-                        }
-                        else
-                        {
-                            float2 o;
-                            if (!OlDecode(n, o))
-                                continue;
-                            cand = dq + o;
-                        }
-                        float d = dot(cand, cand);
-                        if (d < bestD)
-                        {
-                            bestD = d;
-                            best = cand;
-                            has = true;
-                        }
+                            best = min(best, s - (saturate(n.a) - 0.5));
+                        else if (OlDecode(n, dx))
+                            best = min(best, sqrt(dx * dx + s * s));
                     }
                 }
-                return OlEncode(best, has);
+                return OlEncode(best, best <= _OlStep.x);
             }
             ENDHLSL
         }
@@ -288,13 +285,12 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
                 }
                 else
                 {
-                    float2 o;
-                    if (!OlDecode(v, o))
+                    // расстояние до края уже с поправкой на покрытие граничного пикселя (проходы поля)
+                    float d;
+                    if (!OlDecode(v, d))
                         return 0;
-                    // край сида: пиксель с покрытием a — край на (a - 0.5) px дальше его центра
-                    float seedA = OlLoad(r, p + o).a;
-                    float edgeDist = max(length(o) - seedA, 0.0);
-                    result = Effects(OuterLayer(edgeDist, p, center, time), p, time);
+                    result = Effects(OuterLayer(max(d, 0.0), p, center, time), p, time);
+                    v = 0; // для растворения: снаружи контента нет
                 }
 
                 // растворение режет всё — и контент, и подсветку; кромка светится
