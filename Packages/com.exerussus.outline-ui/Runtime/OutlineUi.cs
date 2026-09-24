@@ -9,7 +9,7 @@ namespace Exerussus.Outline.UI
     /// <summary>
     /// Подсветка элементов UI Toolkit. Каждая подсветка — фильтр UI Toolkit на элементе: поддерево элемента
     /// растеризуется, контур строится по реальной альфе (текст, картинки, скругления, дети). Стили — те же
-    /// <see cref="OutlineStyle"/>, ширины и масштабы — в пунктах UI.
+    /// <see cref="OutlineUiStyle"/>, ширины и масштабы — в пунктах UI.
     /// Состояние — SoA-буферы слотов, наружу только <see cref="OutlineUiHandle"/>.
     /// </summary>
     public static class OutlineUi
@@ -22,8 +22,8 @@ namespace Exerussus.Outline.UI
         private static readonly bool[] s_Alive = new bool[SlotCount];
         private static readonly int[] s_Version = new int[SlotCount];
         private static readonly VisualElement[] s_Element = new VisualElement[SlotCount];
-        private static readonly OutlineStyle[] s_Style = new OutlineStyle[SlotCount];
-        private static readonly OutlineStyle[] s_PrevStyle = new OutlineStyle[SlotCount];
+        private static readonly OutlineUiStyle[] s_Style = new OutlineUiStyle[SlotCount];
+        private static readonly OutlineUiStyle[] s_PrevStyle = new OutlineUiStyle[SlotCount];
         private static readonly float[] s_StyleStart = new float[SlotCount];
         private static readonly float[] s_StyleDuration = new float[SlotCount];
         private static readonly float[] s_FadeFrom = new float[SlotCount];
@@ -49,10 +49,10 @@ namespace Exerussus.Outline.UI
         // ------------------------------------------------------------------ Показ
 
         /// <summary>Подсветить элемент (вместе с детьми). Несколько подсветок одного элемента накладываются по порядку.</summary>
-        public static OutlineUiHandle Show(VisualElement element, OutlineStyle style) =>
+        public static OutlineUiHandle Show(VisualElement element, OutlineUiStyle style) =>
             Show(element, style, OutlineUiOptions.Default);
 
-        public static OutlineUiHandle Show(VisualElement element, OutlineStyle style, OutlineUiOptions options)
+        public static OutlineUiHandle Show(VisualElement element, OutlineUiStyle style, OutlineUiOptions options)
         {
             if (element == null || style == null)
                 return OutlineUiHandle.Invalid;
@@ -99,7 +99,7 @@ namespace Exerussus.Outline.UI
             h.Slot > 0 && h.Slot < SlotCount && s_Alive[h.Slot] && s_Version[h.Slot] == h.Version;
 
         /// <summary>Сменить стиль: сразу или плавно за duration секунд (смешиваются цвета, ширины, кривые, эффекты).</summary>
-        public static void SetStyle(in OutlineUiHandle h, OutlineStyle style, float duration = 0f)
+        public static void SetStyle(in OutlineUiHandle h, OutlineUiStyle style, float duration = 0f)
         {
             if (!IsAlive(h) || style == null)
                 return;
@@ -170,6 +170,9 @@ namespace Exerussus.Outline.UI
                 Release(h.Slot);
         }
 
+        /// <summary>Элемент подсветки; null — хэндл протух.</summary>
+        public static VisualElement GetElementOf(in OutlineUiHandle h) => IsAlive(h) ? s_Element[h.Slot] : null;
+
         /// <summary>Снять все подсветки элемента.</summary>
         public static void HideAll(VisualElement element)
         {
@@ -188,7 +191,7 @@ namespace Exerussus.Outline.UI
         // ------------------------------------------------------------------ Для фильтра и эффектов
 
         internal static bool IsSlotAlive(int slot) => slot > 0 && slot < SlotCount && s_Alive[slot];
-        internal static OutlineStyle GetStyle(int slot) => s_Style[slot];
+        internal static OutlineUiStyle GetStyle(int slot) => s_Style[slot];
         internal static VisualElement GetElement(int slot) => s_Element[slot];
 
         internal static float EvaluateFade(int slot, float now)
@@ -201,7 +204,7 @@ namespace Exerussus.Outline.UI
         }
 
         /// <summary>Доля целевого стиля 0..1 (smoothstep) и прежний стиль; 1 и null — перехода нет.</summary>
-        internal static float EvaluateStyleBlend(int slot, float now, out OutlineStyle prev)
+        internal static float EvaluateStyleBlend(int slot, float now, out OutlineUiStyle prev)
         {
             prev = s_PrevStyle[slot];
             if (prev == null)
@@ -282,7 +285,7 @@ namespace Exerussus.Outline.UI
                 s_Element[slot].MarkDirtyRepaint();
         }
 
-        private static void AssignFilter(int slot, OutlineStyle style)
+        private static void AssignFilter(int slot, OutlineUiStyle style)
         {
             float reach = OutlineUiFilter.ReachPoints(style, s_PrevStyle[slot]);
             var f = new FilterFunction(OutlineUiFilter.GetDefinition());

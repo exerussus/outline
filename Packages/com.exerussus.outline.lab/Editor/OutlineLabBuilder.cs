@@ -16,16 +16,19 @@ namespace Exerussus.Outline.Lab.Editor
     /// </summary>
     public static class OutlineLabBuilder
     {
-        private const string Root = "Assets/OutlineLab";
+        internal const string Root = "Assets/OutlineLab";
         private const string Generated = OutlineStylePresets.Folder;
         private const string ScenePath = Root + "/OutlineLab.unity";
         private const int IgnoreRaycastLayer = 2;
 
         [MenuItem("Exerussus/Outline/Lab/Собрать сцену OutlineLab")]
-        public static void BuildScene()
+        public static void BuildScene() => Build();
+
+        /// <summary>Собрать сцену площадки (с бенчмарком). false — пользователь отменил сохранение текущей сцены.</summary>
+        public static bool Build()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
-                return;
+                return false;
 
             // сначала новая сцена: NewScene(Single) выгружает неиспользуемые ассеты, и только что созданные
             // стили превратились бы в «фальшивый null» — ссылки на них в сцене сохранились бы пустыми
@@ -187,13 +190,14 @@ namespace Exerussus.Outline.Lab.Editor
             EditorSceneManager.SaveScene(scene, ScenePath);
             AssetDatabase.SaveAssets();
             Debug.Log($"[Outline] Сцена собрана: {ScenePath}. Play: ховер, ЛКМ — выделить, ПКМ — враг, Backspace — снять, 0..3 — отладка, P — паттерн, C — кроп.");
+            return true;
         }
 
         // ------------------------------------------------------------------ Фича
 
         // ------------------------------------------------------------------ Ассеты
 
-        private static void CreateBloomVolume()
+        internal static void CreateBloomVolume()
         {
             string path = $"{Generated}/LabVolume.asset";
             var profile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(path);
@@ -268,17 +272,16 @@ namespace Exerussus.Outline.Lab.Editor
             var so = new SerializedObject(hud);
             so.FindProperty("feature").objectReferenceValue = feature;
             so.FindProperty("benchmark").objectReferenceValue = bench;
-            so.FindProperty("uiHoverStyle").objectReferenceValue = OutlineStylePresets.GetOrCreate("Hover");
-            var uiNames = new[] { "Selected", "Enemy", "Neon", "Fire", "Electric", "Rainbow", "Sparkle", "Scanner", "Hatched", "Textured" };
+            so.FindProperty("uiHoverStyle").objectReferenceValue = OutlineUiStylePresets.GetOrCreate("Hover");
             var uiStyles = so.FindProperty("uiStyles");
-            uiStyles.arraySize = uiNames.Length;
-            for (int i = 0; i < uiNames.Length; i++)
-                uiStyles.GetArrayElementAtIndex(i).objectReferenceValue = OutlineStylePresets.GetOrCreate(uiNames[i]);
+            uiStyles.arraySize = OutlineUiStylePresets.Names.Length - 1;
+            for (int i = 1; i < OutlineUiStylePresets.Names.Length; i++)
+                uiStyles.GetArrayElementAtIndex(i - 1).objectReferenceValue = OutlineUiStylePresets.GetOrCreate(OutlineUiStylePresets.Names[i]);
             so.FindProperty("uiIcon").objectReferenceValue = OutlineStylePresets.StarsTexture();
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static Material GetOrCreateLit(string name, Color color, Texture2D alphaClipTexture)
+        internal static Material GetOrCreateLit(string name, Color color, Texture2D alphaClipTexture)
         {
             string path = $"{Generated}/Mat_{name}.mat";
             var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
@@ -301,7 +304,7 @@ namespace Exerussus.Outline.Lab.Editor
             return mat;
         }
 
-        private static Texture2D GetOrCreateGridTexture()
+        internal static Texture2D GetOrCreateGridTexture()
         {
             string path = $"{Generated}/Tex_Grid.png";
             var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
@@ -334,7 +337,7 @@ namespace Exerussus.Outline.Lab.Editor
 
         // ------------------------------------------------------------------ Сцена
 
-        private static GameObject Primitive(PrimitiveType type, string name, Vector3 pos, Vector3 scale, Material mat, bool pickable)
+        internal static GameObject Primitive(PrimitiveType type, string name, Vector3 pos, Vector3 scale, Material mat, bool pickable)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -347,7 +350,7 @@ namespace Exerussus.Outline.Lab.Editor
             return go;
         }
 
-        private static void AddTarget(GameObject go, OutlineStyle style, int group, int priority)
+        internal static void AddTarget(GameObject go, OutlineStyle style, int group, int priority)
         {
             var target = go.AddComponent<OutlineTarget>();
             var so = new SerializedObject(target);
@@ -360,7 +363,7 @@ namespace Exerussus.Outline.Lab.Editor
             target.enabled = true;
         }
 
-        private static void EnsureFolder(string path)
+        internal static void EnsureFolder(string path)
         {
             if (AssetDatabase.IsValidFolder(path))
                 return;

@@ -8,12 +8,12 @@ namespace Exerussus.Outline.UI.Tests
     public sealed class OutlineUiTests
     {
         private readonly List<Object> _objects = new();
-        private OutlineStyle _style;
+        private OutlineUiStyle _style;
 
         [SetUp]
         public void SetUp()
         {
-            _style = ScriptableObject.CreateInstance<OutlineStyle>();
+            _style = ScriptableObject.CreateInstance<OutlineUiStyle>();
             _objects.Add(_style);
         }
 
@@ -67,7 +67,7 @@ namespace Exerussus.Outline.UI.Tests
         [Test]
         public void SetStyle_WithDuration_KeepsHandle()
         {
-            var other = ScriptableObject.CreateInstance<OutlineStyle>();
+            var other = ScriptableObject.CreateInstance<OutlineUiStyle>();
             _objects.Add(other);
             other.outerWidth = 60f;
             var e = new VisualElement();

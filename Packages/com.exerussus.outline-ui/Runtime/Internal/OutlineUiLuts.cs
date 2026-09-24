@@ -18,10 +18,10 @@ namespace Exerussus.Outline.UI.Internal
             public int Version;
         }
 
-        private static readonly Dictionary<OutlineStyle, Entry> s_Cache = new(16);
+        private static readonly Dictionary<OutlineUiStyle, Entry> s_Cache = new(16);
         private static readonly ushort[] s_Buffer = new ushort[Width * 4 * 4];
 
-        public static Texture2D Get(OutlineStyle style)
+        public static Texture2D Get(OutlineUiStyle style)
         {
             if (!s_Cache.TryGetValue(style, out var e))
             {
@@ -50,7 +50,7 @@ namespace Exerussus.Outline.UI.Internal
             return e.Texture;
         }
 
-        private static void Bake(OutlineStyle s, Texture2D tex)
+        private static void Bake(OutlineUiStyle s, Texture2D tex)
         {
             BakeCurve(s.outerCurve, 0, x => 1f - x);
             BakeCurve(s.innerCurve, 1, x => 1f - x);

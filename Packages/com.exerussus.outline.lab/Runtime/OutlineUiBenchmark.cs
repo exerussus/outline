@@ -28,7 +28,7 @@ namespace Exerussus.Outline.Lab
         [SerializeField, Min(0f)] private float warmupSeconds = 0.75f;
         [SerializeField, Min(0.5f)] private float measureSeconds = 2f;
         [SerializeField, Tooltip("Стили по очереди (служебные и пресеты).")]
-        private OutlineStyle[] styles = Array.Empty<OutlineStyle>();
+        private OutlineUiStyle[] styles = Array.Empty<OutlineUiStyle>();
         [SerializeField] private Texture2D icon;
         [SerializeField, Tooltip("Разложение цены на первом и последнем ярусах.")]
         private bool breakdown = true;
@@ -42,7 +42,7 @@ namespace Exerussus.Outline.Lab
         {
             public int Tier;
             public string Name;
-            public OutlineStyle Style;              // null и Begin == null — база без подсветки
+            public OutlineUiStyle Style;              // null и Begin == null — база без подсветки
             public Action<VisualElement> Begin;     // временный эффект на каждом элементе
             public Action<float> Tick;              // каждый кадр замера, время с начала пункта
             public bool Motion;
@@ -54,7 +54,7 @@ namespace Exerussus.Outline.Lab
         }
 
         private readonly List<Item> _items = new(128);
-        private readonly List<OutlineStyle> _temp = new(16);
+        private readonly List<OutlineUiStyle> _temp = new(16);
         private readonly List<OutlineUiHandle> _handles = new(64);
         private readonly List<VisualElement>[] _tierElements = { new(), new(), new() };
         private readonly VisualElement[] _tierRoots = new VisualElement[3];
@@ -219,7 +219,7 @@ namespace Exerussus.Outline.Lab
         private void BuildItems()
         {
             _items.Clear();
-            OutlineStyle selected = null, enemy = null, textured = null, fire = null;
+            OutlineUiStyle selected = null, enemy = null, textured = null, fire = null;
             foreach (var s in styles)
             {
                 if (s == null)
@@ -261,7 +261,7 @@ namespace Exerussus.Outline.Lab
             _items.Add(new Item { Tier = 0, Name = "без подсветки (повтор)" });
         }
 
-        private void AddStyleSwap(int tier, OutlineStyle a, OutlineStyle b)
+        private void AddStyleSwap(int tier, OutlineUiStyle a, OutlineUiStyle b)
         {
             int flips = 0;
             _items.Add(new Item
@@ -302,9 +302,9 @@ namespace Exerussus.Outline.Lab
             _items.Add(new Item { Tier = tier, Name = "разложение: только внутренний", Style = inner, Diag = true });
         }
 
-        private OutlineStyle TempStyle(string name)
+        private OutlineUiStyle TempStyle(string name)
         {
-            var s = ScriptableObject.CreateInstance<OutlineStyle>();
+            var s = ScriptableObject.CreateInstance<OutlineUiStyle>();
             s.hideFlags = HideFlags.HideAndDontSave;
             s.name = name;
             _temp.Add(s);
@@ -521,7 +521,7 @@ namespace Exerussus.Outline.Lab
 
         // ------------------------------------------------------------------ Утилиты
 
-        private static string ShortName(OutlineStyle s)
+        private static string ShortName(OutlineUiStyle s)
         {
             string n = s.name;
             int i = n.LastIndexOf('_');

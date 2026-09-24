@@ -22,7 +22,7 @@ namespace Exerussus.Outline.UI
         public bool IsAlive => OutlineUi.IsAlive(this);
 
         /// <summary>Сменить стиль сразу (duration = 0) или плавно.</summary>
-        public void SetStyle(OutlineStyle style, float duration = 0f) => OutlineUi.SetStyle(this, style, duration);
+        public void SetStyle(OutlineUiStyle style, float duration = 0f) => OutlineUi.SetStyle(this, style, duration);
 
         public void SetFade(float value) => OutlineUi.SetFade(this, value);
         public void FadeTo(float target, float duration) => OutlineUi.FadeTo(this, target, duration);

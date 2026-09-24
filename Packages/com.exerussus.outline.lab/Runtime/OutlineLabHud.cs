@@ -15,8 +15,8 @@ namespace Exerussus.Outline.Lab
         [SerializeField] private OutlineBenchmark benchmark;
         [SerializeField, Min(0.05f)] private float refreshInterval = 0.25f;
         [Header("Подсветка UI")]
-        [SerializeField] private OutlineStyle uiHoverStyle;
-        [SerializeField, Tooltip("Стили по клику ЛКМ, по кругу.")] private OutlineStyle[] uiStyles;
+        [SerializeField] private Exerussus.Outline.UI.OutlineUiStyle uiHoverStyle;
+        [SerializeField, Tooltip("Стили по клику ЛКМ, по кругу.")] private Exerussus.Outline.UI.OutlineUiStyle[] uiStyles;
         [SerializeField] private Texture2D uiIcon;
 
         private OutlineStatsView _view;
