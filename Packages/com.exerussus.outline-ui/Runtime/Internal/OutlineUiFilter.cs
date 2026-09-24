@@ -4,19 +4,20 @@ using UnityEngine.UIElements;
 namespace Exerussus.Outline.UI.Internal
 {
     /// <summary>
-    /// Определение фильтра подсветки и заполнение свойств проходов из стиля слота.
-    /// Проходы: расстояние по строке (цель шире элемента на дальность свечения) → по столбцу → сборка.
+    /// Определения фильтра подсветки и заполнение свойств проходов из стиля слота.
+    /// Со свечением: расстояние по строке (цель шире элемента на дальность свечения) → сборка с расстоянием по
+    /// столбцу. Без свечения (заливка, внутренний контур, вспышка, растворение): только сборка, без полей.
     /// </summary>
     internal static class OutlineUiFilter
     {
         private const string ShaderResource = "OutlineUiFilter";
         private const int PassHorizontal = 0;
-        private const int PassVertical = 1;
-        private const int PassComposite = 2;
-        // предел поля в пикселях цели (циклы шейдера); шире — свечение обрезается
-        private const float MaxFieldPx = 255f;
+        private const int PassComposite = 1;
+        // предел поля в пикселях цели (циклы шейдера, цена ~R на пиксель); шире — свечение обрезается
+        private const float MaxFieldPx = 128f;
 
         private static FilterFunctionDefinition s_Definition;
+        private static FilterFunctionDefinition s_DefinitionNoField;
         private static Material s_Material;
 
         private static readonly int IdPx = Shader.PropertyToID("_OlPx");
@@ -54,34 +55,41 @@ namespace Exerussus.Outline.UI.Internal
 
         // ------------------------------------------------------------------ Определения
 
-        public static FilterFunctionDefinition GetDefinition()
+        /// <summary>Определение фильтра: с полем расстояний (есть свечение) или только сборка.</summary>
+        public static FilterFunctionDefinition GetDefinition(bool field)
         {
-            if (s_Definition != null)
-                return s_Definition;
+            var existing = field ? s_Definition : s_DefinitionNoField;
+            if (existing != null)
+                return existing;
             var material = GetMaterial();
             var def = ScriptableObject.CreateInstance<FilterFunctionDefinition>();
             def.hideFlags = HideFlags.HideAndDontSave;
-            def.name = "OutlineUi";
-            def.filterName = "outline-ui";
+            def.name = field ? "OutlineUi" : "OutlineUi NoField";
+            def.filterName = field ? "outline-ui" : "outline-ui-fill";
             def.parameters = new[]
             {
                 new FilterParameterDeclaration { name = "slot", interpolationDefaultValue = new FilterParameter(0f) },
                 new FilterParameterDeclaration { name = "reach", interpolationDefaultValue = new FilterParameter(0f) },
             };
-            def.passes = new[]
-            {
-                new PostProcessingPass
+            var composite = new PostProcessingPass { material = material, passIndex = PassComposite, applySettingsCallback = Apply };
+            def.passes = field
+                ? new[]
                 {
-                    material = material,
-                    passIndex = PassHorizontal,
-                    applySettingsCallback = Apply,
-                    // поле растёт наружу на дальность свечения — цель первого прохода шире элемента
-                    computeRequiredWriteMarginsCallback = ReachMargins,
-                },
-                new PostProcessingPass { material = material, passIndex = PassVertical, applySettingsCallback = Apply },
-                new PostProcessingPass { material = material, passIndex = PassComposite, applySettingsCallback = Apply },
-            };
-            s_Definition = def;
+                    new PostProcessingPass
+                    {
+                        material = material,
+                        passIndex = PassHorizontal,
+                        applySettingsCallback = Apply,
+                        // поле растёт наружу на дальность свечения — цель первого прохода шире элемента
+                        computeRequiredWriteMarginsCallback = ReachMargins,
+                    },
+                    composite,
+                }
+                : new[] { composite };
+            if (field)
+                s_Definition = def;
+            else
+                s_DefinitionNoField = def;
             return def;
         }
 
@@ -111,7 +119,8 @@ namespace Exerussus.Outline.UI.Internal
             float r = Reach(style);
             if (prev != null)
                 r = Mathf.Max(r, Reach(prev));
-            return Mathf.Ceil(r + 2f);
+            // 0 — свечения нет: фильтр без поля расстояний
+            return r > 0f ? Mathf.Ceil(r + 2f) : 0f;
         }
 
         private static float Reach(OutlineUiStyle s)
@@ -150,7 +159,7 @@ namespace Exerussus.Outline.UI.Internal
             // R — наибольшее расстояние поля, px: дальность свечения стиля в пикселях цели
             float reach = func.parameterCount > 1 ? func.GetParameter(1).floatValue : 0f;
             mpb.SetVector(IdStep, new Vector4(Mathf.Min(Mathf.Ceil(reach * ppp), MaxFieldPx), 0f, 0f, 0f));
-            if (ctx.filterPassIndex < PassComposite)
+            if (ctx.postProcessingPass.passIndex != PassComposite)
                 return;
 
             // сборка: параметры стиля слота (с плавной сменой стиля, fade и растворением эффекта)

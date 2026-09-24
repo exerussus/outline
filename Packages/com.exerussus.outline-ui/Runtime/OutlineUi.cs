@@ -288,7 +288,7 @@ namespace Exerussus.Outline.UI
         private static void AssignFilter(int slot, OutlineUiStyle style)
         {
             float reach = OutlineUiFilter.ReachPoints(style, s_PrevStyle[slot]);
-            var f = new FilterFunction(OutlineUiFilter.GetDefinition());
+            var f = new FilterFunction(OutlineUiFilter.GetDefinition(reach > 0f));
             f.AddParameter(new FilterParameter(slot));
             f.AddParameter(new FilterParameter(reach));
             s_Filter[slot] = f;
