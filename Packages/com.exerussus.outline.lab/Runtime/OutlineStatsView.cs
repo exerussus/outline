@@ -35,7 +35,7 @@ namespace Exerussus.Outline.Lab
             _help.style.marginTop = 6;
             _help.text =
                 "Мышь: ховер · ЛКМ — выделить · ПКМ — враг · Backspace — снять\n" +
-                "0..3 — отладка (кадр / маска / сиды / поле) · P — паттерн выделения · O — его пространство · C — кроп · A — сглаживание · V — вид на эффекты";
+                "0..3 — отладка (кадр / маска / сиды / поле) · P — паттерн выделения · O — его пространство · C — кроп · A — сглаживание · V — вид на эффекты\nпод курсором: X — растворить/проявить · G — пульс · F — вспышка";
             Add(_stats);
             Add(_help);
         }
@@ -50,7 +50,8 @@ namespace Exerussus.Outline.Lab
             }
             _stats.text =
                 $"Outline: записей {s.ActiveEntries} · draw {s.DrawCalls} · CPU записи {s.CpuMs:0.000} мс\n" +
-                $"поле {s.FieldWidth}×{s.FieldHeight} (×{s.FieldScale:0.###}){(s.DualField ? " + внутр." : "")} · проходов {s.JfaPasses} · кроп {s.Coverage * 100f:0}%\n" +
+                $"поле {s.FieldWidth}×{s.FieldHeight} (×{s.FieldScale:0.###}){(s.DualField ? " + внутр." : "")} · проходов {s.JfaPasses} · кроп {s.Coverage * 100f:0}%" +
+                (s.Layers > 1 ? $" · слоёв {s.Layers}" : "") + "\n" +
                 $"стоимость поля {s.FieldCost / 1000f:0}k / бюджет {s.FieldBudget / 1000f:0}k · " +
                 (s.EdgeSamples > 1 ? $"сглаживание ×{s.EdgeSamples}" : "без сглаживания") +
                 extra;

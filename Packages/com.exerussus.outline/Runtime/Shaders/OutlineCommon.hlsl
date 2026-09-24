@@ -49,7 +49,7 @@ TEXTURE2D_FLOAT(_OutlineData);    // 16×64 float4
 TEXTURE2D(_OutlineLut);           // 256×128 R8
 TEXTURE2D(_OutlineRamp);          // 256×128 RGBAHalf: id*2 — цвет по ширине свечения, id*2+1 — по углу
 TEXTURE2D_ARRAY(_OutlineTexArray); // текстуры стилей 256×256 с мипами
-TEXTURE2D_FLOAT(_OutlinePos);     // позиция поверхности (xyz) + доминирующая ось нормали (w: 0 x, 1 y, 2 z);
+TEXTURE2D_FLOAT(_OutlinePos);     // RG: координата развёртки поверхности по доминирующей оси нормали;
                                   // есть, только если запись с паттерном Surface* попала в кадр
 
 float4 _OutlineMaskSize;  // xy размер маски (= кадр), zw обратный
@@ -261,11 +261,8 @@ void OutlineSpaceCoords(uint id, float2 p, bool onSurface, out float2 q, out flo
     pxSize = 1.0 / max(sp.w, 1e-3);
     if (space >= 2u && onSurface)
     {
-        float4 s4 = LOAD_TEXTURE2D(_OutlinePos, uint2(p));
-        uint axis = (uint)round(s4.w);
-        pos = s4.xyz;
+        q = LOAD_TEXTURE2D(_OutlinePos, uint2(p)).xy;
         hasPos = true;
-        q = axis == 0u ? s4.yz : (axis == 1u ? s4.xz : s4.xy);
     }
     else
     {

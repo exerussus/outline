@@ -57,7 +57,13 @@ namespace Exerussus.Outline
             }
         }
 
-        private static void OnBeginContext(ScriptableRenderContext ctx, List<Camera> cameras) => Sync(OutlineClock.Now);
+        private static void OnBeginContext(ScriptableRenderContext ctx, List<Camera> cameras)
+        {
+            float now = OutlineClock.Now;
+            OutlineFx.Tick(now);   // завершившиеся эффекты снимают записи
+            Sync(now);             // рендереры записей возвращаются к исходным свойствам
+            OutlineFx.PostSync();  // растворённые объекты скрываются, колбэки вызываются
+        }
 
         /// <summary>Привести скрытие рендереров к текущим подсветкам.</summary>
         public static void Sync(float now)
@@ -70,7 +76,8 @@ namespace Exerussus.Outline
                     if (!OutlineApi.IsSlotAlive(id))
                         continue;
                     var style = OutlineApi.GetStyle(id);
-                    if (style == null || !style.seeThrough || OutlineApi.EvaluateFade(id, now) <= 1e-4f)
+                    bool seeThrough = style != null && (style.seeThrough || OutlineApi.EvaluateDissolve(id, now) >= 0f);
+                    if (!seeThrough || OutlineApi.EvaluateFade(id, now) <= 1e-4f)
                         continue;
                     int count = OutlineApi.GetRendererCount(id);
                     for (int i = 0; i < count; i++)
@@ -101,6 +108,7 @@ namespace Exerussus.Outline
 
         public static void RestoreAll()
         {
+            OutlineFx.RestoreAll();
             s_Scratch.Clear();
             s_Scratch.AddRange(s_Hidden.Keys);
             foreach (var r in s_Scratch)

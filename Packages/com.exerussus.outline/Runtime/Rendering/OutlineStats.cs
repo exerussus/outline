@@ -21,11 +21,13 @@ namespace Exerussus.Outline.Rendering
         public readonly long FieldBudget;
         /// <summary>Сэмплов маски (1 — без сглаживания края).</summary>
         public readonly int EdgeSamples;
+        /// <summary>Отрисованных слоёв (у каждого своё поле; размер и масштаб выше — первого).</summary>
+        public readonly int Layers;
         /// <summary>Время записи Render Graph на CPU, мс.</summary>
         public readonly float CpuMs;
 
         public OutlineStats(bool rendered, int activeEntries, int drawCalls, int jfaPasses, bool dualField,
-            int fieldWidth, int fieldHeight, float fieldScale, float coverage, long fieldCost, long fieldBudget, int edgeSamples, float cpuMs)
+            int fieldWidth, int fieldHeight, float fieldScale, float coverage, long fieldCost, long fieldBudget, int edgeSamples, float cpuMs, int layers = 1)
         {
             Rendered = rendered;
             ActiveEntries = activeEntries;
@@ -40,6 +42,7 @@ namespace Exerussus.Outline.Rendering
             FieldBudget = fieldBudget;
             EdgeSamples = edgeSamples;
             CpuMs = cpuMs;
+            Layers = layers;
         }
     }
 }

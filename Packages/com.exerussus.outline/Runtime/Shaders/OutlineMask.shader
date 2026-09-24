@@ -1,7 +1,7 @@
 // Маска подсветки. Рисуется поштучно (DrawRenderer) материалом-двойником на пару (исходный материал, запись):
 // текстура/цвет альфы копируются с исходного материала на CPU, id и порог клипа — свойства двойника.
 // Выход RGBA8: r = id/255, g = rim (1 - |N·V|), b = 1 видим / 0 перекрыт сценой, a = 1.
-// С _OUTLINE_SURFACE — второй таргет: позиция поверхности (объект или мир, по записи) + доминирующая ось нормали.
+// С _OUTLINE_SURFACE — второй таргет RG16F: координата развёртки поверхности (объект или мир, по записи).
 Shader "Hidden/Exerussus/Outline/Mask"
 {
     Properties
@@ -134,7 +134,11 @@ Shader "Hidden/Exerussus/Outline/Mask"
                 bool objectSpace = _OutlineMaskObjectSpace[id] > 0.5;
                 float3 pos = objectSpace ? input.positionOS : input.positionWS;
                 float3 nrm = objectSpace ? input.normalOS : input.normalWS;
-                o.surface = float4(pos, DominantAxis(nrm));
+                // развёртка по доминирующей оси нормали; вертикаль мира/объекта (y) на боковых гранях всегда во второй
+                // координате — сканер вдоль y работает без 3D-позиции. Пишется в RG16F: вдвое меньше памяти
+                float axis = DominantAxis(nrm);
+                float2 q = axis < 0.5 ? pos.zy : (axis < 1.5 ? pos.xz : pos.xy);
+                o.surface = float4(q, 0.0, 0.0);
             #endif
                 return o;
             }

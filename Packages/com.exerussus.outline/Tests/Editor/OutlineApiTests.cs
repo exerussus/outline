@@ -118,6 +118,38 @@ namespace Exerussus.Outline.Tests
         }
 
         [Test]
+        public void Layers_OwnershipIsPerLayer()
+        {
+            var r = CreateRenderer();
+            var base0 = OutlineApi.Show(r, _style, OutlineOptions.InLayer(0));
+            var over1 = OutlineApi.Show(r, _style, OutlineOptions.InLayer(1));
+            // разные слои не вытесняют друг друга
+            Assert.IsTrue(OutlineApi.IsOwner(r, base0.Slot));
+            Assert.IsTrue(OutlineApi.IsOwner(r, over1.Slot));
+            Assert.AreEqual(1, OutlineApi.GetLayer(over1.Slot));
+
+            // внутри слоя — последний Show
+            var over1b = OutlineApi.Show(r, _style, OutlineOptions.InLayer(1));
+            Assert.IsFalse(OutlineApi.IsOwner(r, over1.Slot));
+            Assert.IsTrue(OutlineApi.IsOwner(r, over1b.Slot));
+            Assert.IsTrue(OutlineApi.IsOwner(r, base0.Slot));
+
+            over1b.Hide();
+            Assert.IsTrue(OutlineApi.IsOwner(r, over1.Slot));
+            base0.Hide();
+            over1.Hide();
+        }
+
+        [Test]
+        public void Layers_OutOfRangeIsClamped()
+        {
+            var r = CreateRenderer();
+            var h = OutlineApi.Show(r, _style, OutlineOptions.InLayer(99));
+            Assert.AreEqual(OutlineApi.MaxLayers - 1, OutlineApi.GetLayer(h.Slot));
+            h.Hide();
+        }
+
+        [Test]
         public void Limit_ExtraShowReturnsInvalid()
         {
             var r = CreateRenderer();

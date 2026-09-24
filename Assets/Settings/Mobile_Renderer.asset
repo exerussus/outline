@@ -90,6 +90,7 @@ MonoBehaviour:
     scissor: 1
     occlusionBias: 0.02
     transparentCutoff: 0.1
+    objectColor: 0
     debugView: 0
     renderInSceneView: 1
   maskShader: {fileID: 4800000, guid: 85821fde10c857c4895ace23e8f5c508, type: 3}

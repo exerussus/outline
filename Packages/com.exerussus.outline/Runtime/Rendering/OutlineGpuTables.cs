@@ -73,28 +73,44 @@ namespace Exerussus.Outline.Rendering
         public Vector4[] Entries => _entries;
 
         /// <summary>Максимальная ширина внутреннего контура за кадр, px полного разрешения.</summary>
-        public float MaxInnerRange { get; private set; }
+        public float MaxInnerRange => _lMaxInnerRange[_layer];
 
         /// <summary>Максимальная дальность поля за кадр, px полного разрешения.</summary>
-        public float MaxRange { get; private set; }
+        public float MaxRange => _lMaxRange[_layer];
 
         /// <summary>Нужно ли внутреннее поле (есть запись с внутренним контуром) — иначе JFA в один таргет.</summary>
-        public bool NeedsInnerField { get; private set; }
+        public bool NeedsInnerField => _lNeedsInnerField[_layer];
 
         /// <summary>Нужна ли карта позиций поверхности (есть запись с паттерном в пространстве Surface*).</summary>
-        public bool NeedsSurface { get; private set; }
+        public bool NeedsSurface => _lNeedsSurface[_layer];
 
         /// <summary>Для маски: 1 — позиция поверхности в координатах объекта, 0 — мира (по id записи).</summary>
         public float[] SurfaceObjectSpace => _surfaceObjectSpace;
 
         /// <summary>Есть запись в режиме прозрачности/маскировки — нужна копия фона.</summary>
-        public bool NeedsBackground { get; private set; }
+        public bool NeedsBackground => _lNeedsBackground[_layer];
 
         /// <summary>Нужен цвет самих объектов (прозрачность с objectOpacity > 0 или переход fade).</summary>
-        public bool NeedsObjectColor { get; private set; }
+        public bool NeedsObjectColor => _lNeedsObjectColor[_layer];
 
         /// <summary>Запись в режиме прозрачности/маскировки.</summary>
         public bool IsSeeThrough(int id) => _seeThrough[id];
+
+        // сводки по слоям; свойства выше отдают значения текущего слоя (SetLayer)
+        private readonly float[] _lMaxInnerRange = new float[OutlineApi.MaxLayers];
+        private readonly float[] _lMaxRange = new float[OutlineApi.MaxLayers];
+        private readonly bool[] _lNeedsInnerField = new bool[OutlineApi.MaxLayers];
+        private readonly bool[] _lNeedsSurface = new bool[OutlineApi.MaxLayers];
+        private readonly bool[] _lNeedsBackground = new bool[OutlineApi.MaxLayers];
+        private readonly bool[] _lNeedsObjectColor = new bool[OutlineApi.MaxLayers];
+        private readonly int[] _lActive = new int[OutlineApi.MaxLayers];
+        private int _layer;
+
+        /// <summary>Выбрать слой, к которому относятся MaxRange, NeedsInnerField и прочие сводки.</summary>
+        public void SetLayer(int layer) => _layer = layer;
+
+        /// <summary>Записей слоя в кадре.</summary>
+        public int LayerActiveCount(int layer) => _lActive[layer];
 
         /// <summary>Сколько записей попало в кадр.</summary>
         public int ActiveCount { get; private set; }
@@ -140,10 +156,13 @@ namespace Exerussus.Outline.Rendering
             Array.Clear(_entries, 0, _entries.Length);
             Array.Clear(_surfaceObjectSpace, 0, _surfaceObjectSpace.Length);
             Array.Clear(_seeThrough, 0, _seeThrough.Length);
-            bool needsBackground = false;
-            bool needsObjectColor = false;
-            float maxInner = 0f;
-            bool needsSurface = false;
+            Array.Clear(_lMaxInnerRange, 0, _lMaxInnerRange.Length);
+            Array.Clear(_lMaxRange, 0, _lMaxRange.Length);
+            Array.Clear(_lNeedsInnerField, 0, _lNeedsInnerField.Length);
+            Array.Clear(_lNeedsSurface, 0, _lNeedsSurface.Length);
+            Array.Clear(_lNeedsBackground, 0, _lNeedsBackground.Length);
+            Array.Clear(_lNeedsObjectColor, 0, _lNeedsObjectColor.Length);
+            Array.Clear(_lActive, 0, _lActive.Length);
             _textures.BeginFrame();
 
             bool linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
@@ -160,9 +179,7 @@ namespace Exerussus.Outline.Rendering
             Vector3 camFwd = camTr.forward;
 
             bool lutDirty = false;
-            float maxRange = 0f;
             int active = 0;
-            bool needsInner = false;
 
             for (int id = 1; id < Rows; id++)
             {
@@ -175,6 +192,7 @@ namespace Exerussus.Outline.Rendering
                 float fade = OutlineApi.EvaluateFade(id, now);
                 if (fade <= 1e-4f)
                     continue;
+                int L = OutlineApi.GetLayer(id);
 
                 float unitScale = resScale;
                 if (style.widthMode == OutlineWidthMode.World)
@@ -194,26 +212,33 @@ namespace Exerussus.Outline.Rendering
                 bool hasInner = style.innerColor.a > 0f && innerPx > 0f;
 
                 // без params-перегрузки Max — она аллоцирует массив
-                maxRange = Mathf.Max(maxRange, Mathf.Max(hasOuter ? outerMaxPx : 0f, hasInner ? innerPx : 0f));
+                _lMaxRange[L] = Mathf.Max(_lMaxRange[L], Mathf.Max(hasOuter ? outerMaxPx : 0f, hasInner ? innerPx : 0f));
                 active++;
+                _lActive[L]++;
                 _active[id] = true;
-                needsInner |= hasInner;
-                if (style.seeThrough)
+                _lNeedsInnerField[L] |= hasInner;
+                // растворение от временного эффекта (OutlineFx): запись становится прозрачной, объект — непрозрачным
+                float fxDissolve = OutlineApi.EvaluateDissolve(id, now);
+                bool fx = fxDissolve >= 0f;
+                bool seeThrough = style.seeThrough || fx;
+                float objectOpacity = fx ? 1f : style.objectOpacity;
+                float dissolveAmount = fx ? Mathf.Max(style.dissolve, fxDissolve) : style.dissolve;
+                if (seeThrough)
                 {
                     _seeThrough[id] = true;
-                    needsBackground = true;
-                    needsObjectColor |= style.objectOpacity > 0f || fade < 0.999f;
+                    _lNeedsBackground[L] = true;
+                    _lNeedsObjectColor[L] |= objectOpacity > 0f || fade < 0.999f;
                     // преломление и мерцание считаются по расстоянию до края внутрь — нужно внутреннее поле
                     if (style.refraction > 0f || style.edgeShimmer.a > 0f)
                     {
                         float w = Mathf.Min(style.refractionWidth * resScale, maxWidth);
-                        needsInner = true;
-                        maxInner = Mathf.Max(maxInner, w);
-                        maxRange = Mathf.Max(maxRange, w);
+                        _lNeedsInnerField[L] = true;
+                        _lMaxInnerRange[L] = Mathf.Max(_lMaxInnerRange[L], w);
+                        _lMaxRange[L] = Mathf.Max(_lMaxRange[L], w);
                     }
                 }
                 if (hasInner)
-                    maxInner = Mathf.Max(maxInner, innerPx);
+                    _lMaxInnerRange[L] = Mathf.Max(_lMaxInnerRange[L], innerPx);
 
                 Put(id, ColOuter, ToShader(style.outerColor, linear));
                 Put(id, ColInner, ToShader(style.innerColor, linear));
@@ -259,10 +284,10 @@ namespace Exerussus.Outline.Rendering
 
                 bool surfaceSpace = space == OutlinePatternSpace.SurfaceObject || space == OutlinePatternSpace.SurfaceWorld;
                 bool usesSpace = style.pattern != OutlinePatternType.None || style.scanColor.a > 0f
-                    || style.dissolve > 0f || style.dissolveByFade || (style.fillTexture != null && style.fillTextureStrength > 0f);
+                    || dissolveAmount > 0f || style.dissolveByFade || (style.fillTexture != null && style.fillTextureStrength > 0f);
                 if (surfaceSpace && usesSpace)
                 {
-                    needsSurface = true;
+                    _lNeedsSurface[L] = true;
                     _surfaceObjectSpace[id] = space == OutlinePatternSpace.SurfaceObject ? 1f : 0f;
                 }
 
@@ -278,12 +303,12 @@ namespace Exerussus.Outline.Rendering
                 var scanDir = style.scanDirection.sqrMagnitude > 1e-8f ? style.scanDirection.normalized : Vector3.up;
                 Put(id, ColScan2, new Vector4(scanDir.x, scanDir.y, scanDir.z, style.scanPeriod));
                 Put(id, ColScan3, new Vector4(style.scanWidth, style.scanSoftness, style.scanSpeed, 0f));
-                Put(id, ColDissolve, new Vector4(style.dissolve, style.dissolveScale, style.dissolveEdgeWidth, style.dissolveByFade ? 1f : 0f));
+                Put(id, ColDissolve, new Vector4(dissolveAmount, style.dissolveScale, style.dissolveEdgeWidth, style.dissolveByFade ? 1f : 0f));
                 Put(id, ColDissolveEdge, ToShader(style.dissolveEdgeColor, linear));
                 int patternSlice = style.pattern == OutlinePatternType.Texture ? _textures.Request(style.patternTexture) : -1;
                 int fillSlice = style.fillTextureStrength > 0f ? _textures.Request(style.fillTexture) : -1;
                 Put(id, ColTextures, new Vector4(patternSlice, fillSlice, style.fillTextureTiling, style.fillTextureStrength));
-                Put(id, ColSeeThrough, new Vector4(style.seeThrough ? 1f : 0f, style.objectOpacity,
+                Put(id, ColSeeThrough, new Vector4(seeThrough ? 1f : 0f, objectOpacity,
                     style.distortion * resScale, style.distortionScale * resScale));
                 Put(id, ColSeeThrough2, new Vector4(style.distortionSpeed, style.refraction * resScale,
                     style.refractionWidth * resScale, 0f));
@@ -314,12 +339,6 @@ namespace Exerussus.Outline.Rendering
                 return false;
             }
 
-            MaxRange = maxRange;
-            NeedsInnerField = needsInner;
-            NeedsSurface = needsSurface;
-            NeedsBackground = needsBackground;
-            NeedsObjectColor = needsObjectColor;
-            MaxInnerRange = maxInner;
             ActiveCount = active;
             _data.SetPixelData(_dataBuf, 0);
             _data.Apply(false, false);

@@ -18,6 +18,8 @@ namespace Exerussus.Outline
         public const int MaxEntries = 63;
 
         internal const int SlotCount = MaxEntries + 1;
+        /// <summary>Число слоёв подсветки (OutlineOptions.layer: 0..MaxLayers-1).</summary>
+        public const int MaxLayers = 4;
         private const int RenderersPerSlot = 8;
 
         private struct RendererRef
@@ -32,6 +34,7 @@ namespace Exerussus.Outline
         private static readonly OutlineStyle[] s_Style = new OutlineStyle[SlotCount];
         private static readonly int[] s_Group = new int[SlotCount];
         private static readonly int[] s_Priority = new int[SlotCount];
+        private static readonly int[] s_Layer = new int[SlotCount];
         private static readonly OutlineAlphaMode[] s_AlphaMode = new OutlineAlphaMode[SlotCount];
         private static readonly float[] s_AlphaThreshold = new float[SlotCount];
         private static readonly float[] s_FadeFrom = new float[SlotCount];
@@ -39,9 +42,15 @@ namespace Exerussus.Outline
         private static readonly float[] s_FadeStart = new float[SlotCount];
         private static readonly float[] s_FadeDuration = new float[SlotCount];
         private static readonly float[] s_HideAt = new float[SlotCount];
+        // анимация растворения записи (временные эффекты OutlineFx); s_DisDuration < 0 — нет
+        private static readonly float[] s_DisFrom = new float[SlotCount];
+        private static readonly float[] s_DisTo = new float[SlotCount];
+        private static readonly float[] s_DisStart = new float[SlotCount];
+        private static readonly float[] s_DisDuration = new float[SlotCount];
         private static readonly List<Renderer>[] s_Renderers = CreateRendererLists();
 
-        private static readonly Dictionary<Renderer, RendererRef> s_RendererRefs = new(128);
+        // владение рендерером — отдельно в каждом слое
+        private static readonly Dictionary<(Renderer, int), RendererRef> s_RendererRefs = new(128);
         private static readonly List<Renderer> s_Scratch = new(32);
         private static int s_AliveCount;
 
@@ -96,6 +105,7 @@ namespace Exerussus.Outline
             s_Style[slot] = style;
             s_Group[slot] = options.group;
             s_Priority[slot] = options.priority;
+            s_Layer[slot] = Mathf.Clamp(options.layer, 0, MaxLayers - 1);
             s_AlphaMode[slot] = options.alphaMode;
             s_AlphaThreshold[slot] = Mathf.Clamp01(options.alphaThreshold);
             s_FadeFrom[slot] = options.fadeIn > 0f ? 0f : 1f;
@@ -103,6 +113,7 @@ namespace Exerussus.Outline
             s_FadeStart[slot] = now;
             s_FadeDuration[slot] = Mathf.Max(0f, options.fadeIn);
             s_HideAt[slot] = -1f;
+            s_DisDuration[slot] = -1f;
             s_AliveCount++;
 
             var list = s_Renderers[slot];
@@ -206,7 +217,9 @@ namespace Exerussus.Outline
 
         /// <summary>Рисует ли этот слот рендерер в маску (рендерер может быть в нескольких подсветках).</summary>
         internal static bool IsOwner(Renderer r, int slot) =>
-            s_RendererRefs.TryGetValue(r, out var rr) && rr.OwnerSlot == slot;
+            s_RendererRefs.TryGetValue((r, s_Layer[slot]), out var rr) && rr.OwnerSlot == slot;
+
+        internal static int GetLayer(int slot) => s_Layer[slot];
 
         internal static float EvaluateFade(int slot, float now)
         {
@@ -234,6 +247,34 @@ namespace Exerussus.Outline
             center = default;
             return false;
         }
+
+        /// <summary>Задать записи анимацию растворения from → to за duration (плавная, smoothstep).</summary>
+        internal static void SetDissolve(in OutlineHandle h, float from, float to, float duration)
+        {
+            if (!IsAlive(h))
+                return;
+            int s = h.Slot;
+            s_DisFrom[s] = Mathf.Clamp01(from);
+            s_DisTo[s] = Mathf.Clamp01(to);
+            s_DisStart[s] = OutlineClock.Now;
+            s_DisDuration[s] = Mathf.Max(0f, duration);
+        }
+
+        /// <summary>Текущая доля растворения записи; -1 — у записи нет анимации растворения.</summary>
+        internal static float EvaluateDissolve(int slot, float now)
+        {
+            float d = s_DisDuration[slot];
+            if (d < 0f)
+                return -1f;
+            if (d <= 0f)
+                return s_DisTo[slot];
+            float t = Mathf.Clamp01((now - s_DisStart[slot]) / d);
+            t = t * t * (3f - 2f * t);
+            return Mathf.Lerp(s_DisFrom[slot], s_DisTo[slot], t);
+        }
+
+        internal static float EvaluateDissolve(in OutlineHandle h) =>
+            IsAlive(h) ? EvaluateDissolve(h.Slot, OutlineClock.Now) : -1f;
 
         /// <summary>Первый живой рендерер записи (якорь паттерна в пространстве объекта).</summary>
         internal static Renderer GetFirstRenderer(int slot)
@@ -277,15 +318,16 @@ namespace Exerussus.Outline
 
         private static void Acquire(Renderer r, int slot)
         {
-            if (s_RendererRefs.TryGetValue(r, out var rr))
+            var key = (r, s_Layer[slot]);
+            if (s_RendererRefs.TryGetValue(key, out var rr))
             {
                 rr.Count++;
-                rr.OwnerSlot = slot; // последний Show владеет цветом рендерера
-                s_RendererRefs[r] = rr;
+                rr.OwnerSlot = slot; // последний Show владеет рендерером в своём слое
+                s_RendererRefs[key] = rr;
             }
             else
             {
-                s_RendererRefs.Add(r, new RendererRef { Count = 1, OwnerSlot = slot });
+                s_RendererRefs.Add(key, new RendererRef { Count = 1, OwnerSlot = slot });
             }
         }
 
@@ -300,27 +342,28 @@ namespace Exerussus.Outline
             for (int i = 0; i < list.Count; i++)
             {
                 var r = list[i];
-                if (ReferenceEquals(r, null) || !s_RendererRefs.TryGetValue(r, out var rr))
+                var key = (r, s_Layer[slot]);
+                if (ReferenceEquals(r, null) || !s_RendererRefs.TryGetValue(key, out var rr))
                     continue;
 
                 rr.Count--;
                 if (rr.Count <= 0)
                 {
-                    s_RendererRefs.Remove(r);
+                    s_RendererRefs.Remove(key);
                     continue;
                 }
 
                 if (rr.OwnerSlot == slot)
-                    rr.OwnerSlot = FindOtherOwner(r);
-                s_RendererRefs[r] = rr;
+                    rr.OwnerSlot = FindOtherOwner(r, s_Layer[slot]);
+                s_RendererRefs[key] = rr;
             }
             list.Clear();
         }
 
-        private static int FindOtherOwner(Renderer r)
+        private static int FindOtherOwner(Renderer r, int layer)
         {
             for (int s = SlotCount - 1; s >= 1; s--)
-                if (s_Alive[s] && s_Renderers[s].Contains(r))
+                if (s_Alive[s] && s_Layer[s] == layer && s_Renderers[s].Contains(r))
                     return s;
             return 0;
         }

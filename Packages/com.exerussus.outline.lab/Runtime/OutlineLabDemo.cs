@@ -104,6 +104,22 @@ namespace Exerussus.Outline.Lab
                 return;
             if (keyboard.backspaceKey.wasPressedThisFrame)
                 ClearSelection();
+
+            // временные эффекты на объект под курсором
+            if (picked != null)
+            {
+                if (keyboard.xKey.wasPressedThisFrame)
+                {
+                    if (OutlineFx.IsDissolved(picked))
+                        OutlineFx.DissolveIn(picked, 0.8f);
+                    else
+                        OutlineFx.DissolveOut(picked, 0.8f);
+                }
+                if (keyboard.gKey.wasPressedThisFrame)
+                    OutlineFx.Pulse(picked);
+                if (keyboard.fKey.wasPressedThisFrame)
+                    OutlineFx.Flash(picked, new Color(2.5f, 2.5f, 2.5f, 0.8f));
+            }
             if (feature != null)
             {
                 if (keyboard.digit0Key.wasPressedThisFrame) feature.settings.debugView = OutlineDebugView.None;

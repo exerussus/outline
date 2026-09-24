@@ -16,6 +16,11 @@ namespace Exerussus.Outline
         public bool includeInactive;
         /// <summary>Плавное появление, секунды. 0 — сразу.</summary>
         public float fadeIn;
+        /// <summary>
+        /// Слой 0..3. Слои рисуются независимо (свои маска, поле и композит) и накладываются по порядку: 1 поверх 0.
+        /// Внутри слоя — группы, приоритеты, стыки и правило «последний Show владеет рендерером».
+        /// </summary>
+        public int layer;
 
         public static OutlineOptions Default => new()
         {
@@ -26,7 +31,18 @@ namespace Exerussus.Outline
             includeChildren = true,
             includeInactive = false,
             fadeIn = 0f,
+            layer = 0,
         };
+
+        /// <summary>Опции по умолчанию в указанном слое.</summary>
+        public static OutlineOptions InLayer(int layer, int group = 0, float fadeIn = 0f)
+        {
+            var o = Default;
+            o.layer = layer;
+            o.group = group;
+            o.fadeIn = fadeIn;
+            return o;
+        }
 
         public static OutlineOptions InGroup(int group, float fadeIn = 0f)
         {

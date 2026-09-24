@@ -144,7 +144,7 @@ namespace Exerussus.Outline
         [Header("Сканер (заливка)")]
         [ColorUsage(true, true), Tooltip("Цвет полосы, альфа — сила. 0 — выключено. Строится в пространстве паттерна.")]
         public Color scanColor = new(0.4f, 0.9f, 1f, 0f);
-        [Tooltip("Направление движения полосы. Для Screen и Object берутся x, y.")]
+        [Tooltip("Направление движения полосы, x и y: в Screen и Object — на экране, в Surface* — в развёртке поверхности (y — высота на боковых гранях).")]
         public Vector3 scanDirection = Vector3.up;
         [Min(0.001f), Tooltip("Расстояние между полосами: px для Screen, единицы мира/объекта для остальных.")]
         public float scanPeriod = 1f;
