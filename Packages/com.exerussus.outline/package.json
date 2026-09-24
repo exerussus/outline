@@ -1,6 +1,6 @@
 {
   "name": "com.exerussus.outline",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "displayName": "Exerussus Outline",
   "description": "Мягкий настраиваемый аутлайн для URP (Render Graph) на Jump Flood: разные цвета и стили, внутренний контур, заливка, rim, паттерны, перекрытие, анимация, группы и приоритеты.",
   "unity": "6000.6",

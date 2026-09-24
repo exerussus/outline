@@ -289,10 +289,16 @@ namespace Exerussus.Outline.Rendering
                 }
             }
 
-            bool dual = _tables.NeedsInnerField;
+            // слой без внешнего и внутреннего контура (заливка, вспышка, растворение, маскировка без кромки)
+            // поле расстояний не считает вовсе: композиту отдаётся пустое поле 1×1
+            bool needsField = _tables.MaxRange > 0f;
+            bool dual = needsField && _tables.NeedsInnerField;
             bool extra = _settings.EffectiveExtraPass;
             float areaPx = (area.z - area.x) * (area.w - area.y);
-            float fieldScale = ResolveFieldScale(cameraData, areaPx, dual, extra, out long cost);
+            long cost = 0;
+            float fieldScale = 1f;
+            if (needsField)
+                fieldScale = ResolveFieldScale(cameraData, areaPx, dual, extra, out cost);
 
             int fieldW = Mathf.Clamp(Mathf.CeilToInt(width * fieldScale), 1, MaxFieldSize);
             int fieldH = Mathf.Clamp(Mathf.CeilToInt(height * fieldScale), 1, MaxFieldSize);
@@ -364,12 +370,13 @@ namespace Exerussus.Outline.Rendering
                 clearBuffer = !scissorClear,
             };
 
-            var seedDesc = new TextureDesc(fieldW, fieldH)
+            var seedDesc = new TextureDesc(needsField ? fieldW : 1, needsField ? fieldH : 1)
             {
                 format = GraphicsFormat.R8G8B8A8_UNorm,
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp,
-                clearBuffer = false,
+                clearBuffer = !needsField, // пустое поле: очищено нулём = «нет сида»
+                clearColor = Color.clear,
             };
             seedDesc.name = "_OutlineSeedsA";
             var outerA = renderGraph.CreateTexture(seedDesc);
@@ -432,10 +439,13 @@ namespace Exerussus.Outline.Rendering
             // включаются лишь на последних проходах; крупные шаги считают одно внешнее поле
             int innerStart = dual ? OutlineQuality.InnerStartStep(_tables.MaxInnerRange, fieldScale) : 0;
 
-            RecordFullscreen(renderGraph, _initSampler, _jfaMaterial,
-                dual ? OutlineShaderIds.PassInitDual : OutlineShaderIds.PassInit,
-                outerA, innerA, AccessFlags.WriteAll, TextureHandle.nullHandle, TextureHandle.nullHandle,
-                frame, 0f, 0f, fieldScissor);
+            if (needsField)
+            {
+                RecordFullscreen(renderGraph, _initSampler, _jfaMaterial,
+                    dual ? OutlineShaderIds.PassInitDual : OutlineShaderIds.PassInit,
+                    outerA, innerA, AccessFlags.WriteAll, TextureHandle.nullHandle, TextureHandle.nullHandle,
+                    frame, 0f, 0f, fieldScissor);
+            }
 
             var outerCur = outerA;
             var outerNext = outerB;
@@ -446,10 +456,19 @@ namespace Exerussus.Outline.Rendering
             // шаги: от StartStep до 1, затем (опционально) ещё один шаг 1 — та же раскладка, что в OutlineQuality
             int start = OutlineQuality.StartStep(_tables.MaxRange, fieldScale);
             int total = 0;
-            for (int st = start; st >= 1; st >>= 1)
-                total++;
-            if (extra)
-                total++;
+            if (needsField)
+            {
+                for (int st = start; st >= 1; st >>= 1)
+                    total++;
+                if (extra)
+                    total++;
+            }
+            else
+            {
+                // композит читает пустое поле 1×1: пиксель поля всегда (0, 0), внутри «прямоугольника работы»
+                frame.SeedSize = new Vector4(1f, 1f, 0f, 1f);
+                frame.Rect = new Vector4(0f, 0f, 1f, 1f);
+            }
 
             for (int i = 0; i < total; i++)
             {
@@ -512,7 +531,7 @@ namespace Exerussus.Outline.Rendering
                 outerCur, dual ? innerCur : outerCur, frame, 0f, (float)_settings.debugView, frameScissor);
 
             float coverage = (rect.z - rect.x) * (rect.w - rect.y) / (fieldW * (float)fieldH);
-            agg.Add(_draws.Count, passes + 1, dual, fieldW, fieldH, fieldScale, coverage, cost, samples);
+            agg.Add(_draws.Count, needsField ? passes + 1 : 0, dual, fieldW, fieldH, fieldScale, coverage, cost, samples);
             return true;
         }
 
