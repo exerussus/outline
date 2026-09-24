@@ -209,5 +209,44 @@ namespace Exerussus.Outline.Tests
             _handles.Add(h);
             Assert.AreEqual(2, OutlineApi.GetRendererCount(h.Slot));
         }
+
+        [Test]
+        public void SetStyle_WithDuration_BlendsFromPreviousStyle()
+        {
+            var other = ScriptableObject.CreateInstance<OutlineStyle>();
+            _objects.Add(other);
+            var h = Show(CreateRenderer());
+            float now = OutlineClock.Now;
+
+            h.SetStyle(other, 10f);
+            Assert.IsTrue(h.IsStyleBlending);
+            float t = OutlineApi.EvaluateStyleBlend(h.Slot, now, out var prev);
+            Assert.AreSame(_style, prev);
+            Assert.AreSame(other, OutlineApi.GetStyle(h.Slot));
+            Assert.Less(t, 0.01f);
+            Assert.AreEqual(1f, OutlineApi.EvaluateStyleBlend(h.Slot, now + 11f, out prev));
+            Assert.IsNull(prev);
+
+            // разворот посреди перехода — продолжение с той же точки
+            h.SetStyle(_style, 10f);
+            OutlineApi.EvaluateStyleBlend(h.Slot, OutlineClock.Now, out prev);
+            Assert.AreSame(other, prev);
+            Assert.Greater(OutlineApi.EvaluateStyleBlend(h.Slot, OutlineClock.Now, out _), 0.99f);
+
+            // мгновенная смена сбрасывает переход
+            h.SetStyle(other);
+            Assert.IsFalse(h.IsStyleBlending);
+        }
+
+        [Test]
+        public void SetStyle_ZeroDuration_IsInstant()
+        {
+            var other = ScriptableObject.CreateInstance<OutlineStyle>();
+            _objects.Add(other);
+            var h = Show(CreateRenderer());
+            h.SetStyle(other, 0f);
+            Assert.IsFalse(h.IsStyleBlending);
+            Assert.AreSame(other, OutlineApi.GetStyle(h.Slot));
+        }
     }
 }
