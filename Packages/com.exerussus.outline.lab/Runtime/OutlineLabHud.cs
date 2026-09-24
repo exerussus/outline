@@ -14,8 +14,13 @@ namespace Exerussus.Outline.Lab
         [SerializeField] private OutlineRendererFeature feature;
         [SerializeField] private OutlineBenchmark benchmark;
         [SerializeField, Min(0.05f)] private float refreshInterval = 0.25f;
+        [Header("Подсветка UI")]
+        [SerializeField] private OutlineStyle uiHoverStyle;
+        [SerializeField, Tooltip("Стили по клику ЛКМ, по кругу.")] private OutlineStyle[] uiStyles;
+        [SerializeField] private Texture2D uiIcon;
 
         private OutlineStatsView _view;
+        private OutlineUiLabPanel _uiPanel;
         private float _nextRefresh;
         private float _frameMsAccum;
         private int _frames;
@@ -25,12 +30,20 @@ namespace Exerussus.Outline.Lab
             var doc = GetComponent<UIDocument>();
             _view = new OutlineStatsView();
             doc.rootVisualElement.Add(_view);
+            _uiPanel = new OutlineUiLabPanel(uiHoverStyle, uiStyles, uiIcon);
+            doc.rootVisualElement.Add(_uiPanel);
         }
 
         private void OnDisable()
         {
             _view?.RemoveFromHierarchy();
             _view = null;
+            if (_uiPanel != null)
+            {
+                Exerussus.Outline.UI.OutlineUi.HideAll();
+                _uiPanel.RemoveFromHierarchy();
+                _uiPanel = null;
+            }
         }
 
         private void Update()
@@ -39,6 +52,8 @@ namespace Exerussus.Outline.Lab
             {
                 bool hide = benchmark != null && benchmark.HideOverlay;
                 _view.style.display = hide ? DisplayStyle.None : DisplayStyle.Flex;
+                if (_uiPanel != null)
+                    _uiPanel.style.display = hide ? DisplayStyle.None : DisplayStyle.Flex;
             }
             _frameMsAccum += Time.unscaledDeltaTime * 1000f;
             _frames++;
