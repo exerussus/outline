@@ -68,11 +68,16 @@ struct OlRect
     float4 uvRect;   // прямоугольник источника в uv
     float2 texSize;  // размер текстуры источника
     float2 size;     // размер прямоугольника, px
+    bool flip;       // перевернуть источник по y
 };
 
-OlRect OlMakeRect(OlVaryings i)
+// flip: переворот источника по y. Проверено на 6000.6: источник каждого прохода (и контент элемента, и выходы
+// наших проходов) уже в ориентации квада — переворот из примера Unity здесь переворачивает картинку; флаг оставлен
+// на случай другой платформы/версии.
+OlRect OlMakeRect(OlVaryings i, bool flip)
 {
     OlRect r;
+    r.flip = flip;
     r.uvRect = GetFilterUVRect((uint)(i.rectIndex + 0.5));
     uint w, h;
     _MainTex.GetDimensions(w, h);
@@ -94,7 +99,8 @@ float4 OlLoad(OlRect r, float2 p)
     if (any(p < 0.0) || any(p >= r.size))
         return float4(1.0, 1.0, 1.0, 0.0);
     float2 n = p / r.size;
-    n.y = 1.0 - n.y; // содержимое в текстуре перевёрнуто относительно uv квада
+    if (r.flip)
+        n.y = 1.0 - n.y;
     float2 uv = r.uvRect.xy + n * r.uvRect.zw;
     int2 t = int2(floor(uv * r.texSize));
     return _MainTex.Load(int3(t, 0));

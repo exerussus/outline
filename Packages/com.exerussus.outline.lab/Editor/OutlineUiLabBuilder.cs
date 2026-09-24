@@ -13,21 +13,21 @@ namespace Exerussus.Outline.Lab.Editor
     /// </summary>
     public static class OutlineUiLabBuilder
     {
-        private const string Root = "Assets/OutlineUiLab";
+        internal const string Root = "Assets/OutlineUiLab";
         private const string ScenePath = Root + "/OutlineUiLab.unity";
         private const string PanelPath = Root + "/OutlineUiLabPanelSettings.asset";
 
-        // прозрачность и маскировка в UI не применяются — этих стилей в бенче нет
-        private static readonly HashSet<string> Skip = new() { "Cloak", "Glass" };
-
         [MenuItem("Exerussus/OutlineUI/Lab/Собрать сцену бенчмарка")]
-        public static void BuildScene()
+        public static void BuildScene() => Build();
+
+        /// <summary>Собрать сцену бенчмарка UI. false — пользователь отменил сохранение текущей сцены.</summary>
+        public static bool Build()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
-                return;
+                return false;
             var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
             EnsureFolder(Root);
-            EnsureFolder(OutlineStylePresets.Folder);
+            EnsureFolder(OutlineStylePresets.Folder); // текстура звёзд для иконки и пресета Textured
 
             var cam = Camera.main;
             if (cam != null)
@@ -36,58 +36,46 @@ namespace Exerussus.Outline.Lab.Editor
                 cam.backgroundColor = new Color(0.09f, 0.1f, 0.13f);
             }
 
-            var panel = AssetDatabase.LoadAssetAtPath<PanelSettings>(PanelPath);
-            if (panel == null)
-            {
-                panel = ScriptableObject.CreateInstance<PanelSettings>();
-                panel.scaleMode = PanelScaleMode.ConstantPixelSize;
-                panel.scale = 1f;
-                var themes = AssetDatabase.FindAssets("t:ThemeStyleSheet");
-                if (themes.Length > 0)
-                    panel.themeStyleSheet = AssetDatabase.LoadAssetAtPath<ThemeStyleSheet>(AssetDatabase.GUIDToAssetPath(themes[0]));
-                AssetDatabase.CreateAsset(panel, PanelPath);
-            }
+            var panel = GetOrCreatePanel();
 
             var go = new GameObject("UI Bench");
             var doc = go.AddComponent<UIDocument>();
             doc.panelSettings = panel;
             var bench = go.AddComponent<OutlineUiBenchmark>();
 
-            var names = new List<string> { "Hover", "Selected", "Enemy" };
-            names.AddRange(OutlineStylePresets.Gallery);
-            foreach (var n in OutlineStylePresets.Effects)
-            {
-                if (!Skip.Contains(n))
-                    names.Add(n);
-            }
+            var names = OutlineUiStylePresets.Names;
             var so = new SerializedObject(bench);
             var styles = so.FindProperty("styles");
-            styles.arraySize = names.Count;
-            for (int i = 0; i < names.Count; i++)
-                styles.GetArrayElementAtIndex(i).objectReferenceValue = OutlineStylePresets.GetOrCreate(names[i]);
+            styles.arraySize = names.Length;
+            for (int i = 0; i < names.Length; i++)
+                styles.GetArrayElementAtIndex(i).objectReferenceValue = OutlineUiStylePresets.GetOrCreate(names[i]);
             so.FindProperty("icon").objectReferenceValue = OutlineStylePresets.StarsTexture();
             so.ApplyModifiedPropertiesWithoutUndo();
 
             EditorSceneManager.SaveScene(scene, ScenePath);
             AssetDatabase.SaveAssets();
             Debug.Log($"[OutlineUiLab] Сцена собрана: {ScenePath}. Play — бенчмарк, лог Temp/outline-ui.log, снимки Temp/OutlineUiShots.");
+            return true;
         }
 
-        [MenuItem("Exerussus/OutlineUI/Lab/Запустить бенчмарк")]
-        public static void RunBenchmark()
+        /// <summary>PanelSettings площадки UI: постоянный размер пикселя, тема проекта.</summary>
+        internal static PanelSettings GetOrCreatePanel()
         {
-            if (EditorApplication.isPlaying)
-                return;
-            if (!File.Exists(ScenePath))
-                BuildScene();
-            else if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
-                return;
-            if (EditorSceneManager.GetActiveScene().path != ScenePath)
-                EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-            EditorApplication.EnterPlaymode();
+            EnsureFolder(Root);
+            var panel = AssetDatabase.LoadAssetAtPath<PanelSettings>(PanelPath);
+            if (panel != null)
+                return panel;
+            panel = ScriptableObject.CreateInstance<PanelSettings>();
+            panel.scaleMode = PanelScaleMode.ConstantPixelSize;
+            panel.scale = 1f;
+            var themes = AssetDatabase.FindAssets("t:ThemeStyleSheet");
+            if (themes.Length > 0)
+                panel.themeStyleSheet = AssetDatabase.LoadAssetAtPath<ThemeStyleSheet>(AssetDatabase.GUIDToAssetPath(themes[0]));
+            AssetDatabase.CreateAsset(panel, PanelPath);
+            return panel;
         }
 
-        private static void EnsureFolder(string path)
+        internal static void EnsureFolder(string path)
         {
             if (AssetDatabase.IsValidFolder(path))
                 return;

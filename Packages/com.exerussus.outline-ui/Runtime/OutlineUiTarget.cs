@@ -9,13 +9,13 @@ namespace Exerussus.Outline.UI
     [UxmlElement]
     public partial class OutlineUiTarget : VisualElement
     {
-        private OutlineStyle _outlineStyle;
+        private OutlineUiStyle _outlineStyle;
         private bool _highlighted = true;
         private OutlineUiHandle _handle;
 
         /// <summary>Стиль подсветки.</summary>
         [UxmlAttribute]
-        public OutlineStyle outlineStyle
+        public OutlineUiStyle outlineStyle
         {
             get => _outlineStyle;
             set

@@ -4,6 +4,7 @@
     "references": [
         "Exerussus.Outline",
         "Exerussus.Outline.Editor",
+        "Exerussus.Outline.UI",
         "Exerussus.Outline.Lab",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime"

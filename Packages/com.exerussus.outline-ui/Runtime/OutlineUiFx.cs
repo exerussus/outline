@@ -11,12 +11,12 @@ namespace Exerussus.Outline.UI
     /// </summary>
     public static class OutlineUiFx
     {
-        private static OutlineStyle s_PulseStyle;
-        private static OutlineStyle s_DissolveStyle;
+        private static OutlineUiStyle s_PulseStyle;
+        private static OutlineUiStyle s_DissolveStyle;
         private static readonly HashSet<VisualElement> s_Dissolved = new();
 
         /// <summary>Одна вспышка подсветки: нарастает за duration·rise, гаснет за остаток.</summary>
-        public static OutlineUiHandle Pulse(VisualElement element, OutlineStyle style = null, float duration = 0.6f,
+        public static OutlineUiHandle Pulse(VisualElement element, OutlineUiStyle style = null, float duration = 0.6f,
             float rise = 0.35f, Action onComplete = null)
         {
             if (element == null)
@@ -36,7 +36,7 @@ namespace Exerussus.Outline.UI
         {
             if (element == null)
                 return OutlineUiHandle.Invalid;
-            var style = ScriptableObject.CreateInstance<OutlineStyle>();
+            var style = ScriptableObject.CreateInstance<OutlineUiStyle>();
             style.hideFlags = HideFlags.HideAndDontSave;
             style.name = "OutlineUi Flash";
             style.outerColor = new Color(color.r, color.g, color.b, 0f);
@@ -54,7 +54,7 @@ namespace Exerussus.Outline.UI
         }
 
         /// <summary>Растворить элемент: шумовой порог съедает содержимое с горящей кромкой, после — элемент скрыт.</summary>
-        public static OutlineUiHandle DissolveOut(VisualElement element, float duration = 0.8f, OutlineStyle style = null,
+        public static OutlineUiHandle DissolveOut(VisualElement element, float duration = 0.8f, OutlineUiStyle style = null,
             Action onComplete = null)
         {
             if (element == null)
@@ -76,7 +76,7 @@ namespace Exerussus.Outline.UI
         }
 
         /// <summary>Проявить растворённый (или любой) элемент обратным растворением.</summary>
-        public static OutlineUiHandle DissolveIn(VisualElement element, float duration = 0.8f, OutlineStyle style = null,
+        public static OutlineUiHandle DissolveIn(VisualElement element, float duration = 0.8f, OutlineUiStyle style = null,
             Action onComplete = null)
         {
             if (element == null)
@@ -108,38 +108,38 @@ namespace Exerussus.Outline.UI
 
         private static long Ms(float seconds) => (long)(Mathf.Max(0f, seconds) * 1000f);
 
-        private static OutlineStyle PulseStyle()
+        private static OutlineUiStyle PulseStyle()
         {
             if (s_PulseStyle != null)
                 return s_PulseStyle;
-            var s = ScriptableObject.CreateInstance<OutlineStyle>();
+            var s = ScriptableObject.CreateInstance<OutlineUiStyle>();
             s.hideFlags = HideFlags.HideAndDontSave;
             s.name = "OutlineUi Pulse";
             s.outerColor = new Color(0.9f, 1.1f, 1.5f, 0.8f);
-            s.outerWidth = 14f;
+            s.outerWidth = 8f;
             s.innerColor = new Color(1f, 1f, 1f, 0f);
             s.additive = 1f;
             s_PulseStyle = s;
             return s;
         }
 
-        private static OutlineStyle DissolveStyle()
+        private static OutlineUiStyle DissolveStyle()
         {
             if (s_DissolveStyle != null)
                 return s_DissolveStyle;
-            var s = ScriptableObject.CreateInstance<OutlineStyle>();
+            var s = ScriptableObject.CreateInstance<OutlineUiStyle>();
             s.hideFlags = HideFlags.HideAndDontSave;
             s.name = "OutlineUi Dissolve";
             s.outerColor = new Color(1f, 0.5f, 0.1f, 0f);
             s.innerColor = new Color(1f, 0.5f, 0.1f, 0f);
-            s.dissolveScale = 0.15f;
+            s.dissolveScale = 14f;
             s.dissolveEdgeWidth = 0.08f;
             s.dissolveEdgeColor = new Color(1f, 0.55f, 0.15f, 1f);
             s_DissolveStyle = s;
             return s;
         }
 
-        private static void DestroyStyle(OutlineStyle s)
+        private static void DestroyStyle(OutlineUiStyle s)
         {
             if (s == null)
                 return;

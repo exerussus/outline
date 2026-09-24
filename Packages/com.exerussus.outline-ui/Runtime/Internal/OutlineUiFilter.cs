@@ -106,7 +106,7 @@ namespace Exerussus.Outline.UI.Internal
         }
 
         /// <summary>Дальность свечения, пункты: сколько места нужно вокруг элемента.</summary>
-        public static float ReachPoints(OutlineStyle style, OutlineStyle prev)
+        public static float ReachPoints(OutlineUiStyle style, OutlineUiStyle prev)
         {
             float r = Reach(style);
             if (prev != null)
@@ -114,7 +114,7 @@ namespace Exerussus.Outline.UI.Internal
             return Mathf.Ceil(r + 2f);
         }
 
-        private static float Reach(OutlineStyle s)
+        private static float Reach(OutlineUiStyle s)
         {
             if (s == null)
                 return 0f;
@@ -122,7 +122,7 @@ namespace Exerussus.Outline.UI.Internal
             return Mathf.Max(outer, 0f);
         }
 
-        public static bool IsAnimated(OutlineStyle s)
+        public static bool IsAnimated(OutlineUiStyle s)
         {
             if (s == null)
                 return false;

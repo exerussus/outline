@@ -23,7 +23,7 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
             // расстояние по строке до ближайшего пикселя силуэта (с поправкой на его покрытие)
             float4 Frag(OlVaryings i) : SV_Target
             {
-                OlRect r = OlMakeRect(i);
+                OlRect r = OlMakeRect(i, false);
                 float2 p = OlPixel(i, r);
                 float4 v = OlLoad(r, p);
                 if (OlOccupied(v))
@@ -59,7 +59,7 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
             // евклидово расстояние: минимум по столбцу из sqrt(dx² + dy²), dx — из прохода по строкам
             float4 Frag(OlVaryings i) : SV_Target
             {
-                OlRect r = OlMakeRect(i);
+                OlRect r = OlMakeRect(i, false);
                 float2 p = OlPixel(i, r);
                 float4 v = OlLoad(r, p);
                 if (OlOccupied(v))
@@ -265,7 +265,7 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
 
             float4 Frag(OlVaryings i) : SV_Target
             {
-                OlRect r = OlMakeRect(i);
+                OlRect r = OlMakeRect(i, false);
                 float2 p = OlPixel(i, r);
                 float2 center = r.size * 0.5;
                 float time = _OlPx.y;

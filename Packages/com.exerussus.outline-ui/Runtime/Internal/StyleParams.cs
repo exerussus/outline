@@ -32,25 +32,19 @@ namespace Exerussus.Outline.UI.Internal
         public const int Tex = 21;
         public const int Count = 22;
 
-        // «мировая» единица стиля в UI — 100 пунктов (patternWorldScale, dissolveScale, scanPeriod …)
-        private const float PointsPerWorldUnit = 100f;
-
-        public static void Write(OutlineStyle s, float ppp, float fade, float fxDissolve, Vector4[] o)
+        public static void Write(OutlineUiStyle s, float ppp, float fade, float fxDissolve, Vector4[] o)
         {
+            // все длины стиля — в пунктах; в шейдере — пиксели цели фильтра
             o[Outer] = C(s.outerColor);
             o[Inner] = C(s.innerColor);
             o[Fill] = C(s.fillColor);
             o[Widths] = new Vector4(s.outerWidth * ppp, s.innerWidth * ppp, fade, s.additive);
             o[Pulse] = new Vector4(s.pulseSpeed, s.pulseAlpha, s.pulseWidth, 0f);
             o[Noise] = new Vector4(s.noiseScale * ppp, s.noiseAmount, s.noiseSpeed, 0f);
-
-            bool screen = s.patternSpace == OutlinePatternSpace.Screen;
-            // паттерн в пространстве элемента: Screen — пункты, остальные — «мировые» единицы
-            float unitsPerPx = screen ? 1f / ppp : 1f / (ppp * PointsPerWorldUnit);
-            float period = screen ? s.patternScale : s.patternWorldScale;
-            o[Pattern] = new Vector4((float)s.pattern, period, s.patternAngle * Mathf.Deg2Rad, s.patternSpeed);
+            o[Pattern] = new Vector4((float)s.pattern, s.patternScale, s.patternAngle * Mathf.Deg2Rad, s.patternSpeed);
             o[Pattern2] = new Vector4(s.patternFill, s.patternStrength, (float)(int)s.patternLayers, s.patternSoftness);
-            o[Space] = new Vector4(unitsPerPx, 1f / (ppp * PointsPerWorldUnit), 0f, 0f);
+            // x — пунктов на пиксель для паттерна, y — для сканера, растворения и текстуры заливки
+            o[Space] = new Vector4(1f / ppp, 1f / ppp, 0f, 0f);
 
             o[Gradient] = new Vector4(s.useOuterGradient ? 1f : 0f, s.contourMix, s.contourSpeed, 1f);
             o[Wave] = new Vector4(s.wavePeriod * ppp, s.waveSpeed, s.waveDuty, s.waveStrength);
@@ -60,7 +54,7 @@ namespace Exerussus.Outline.UI.Internal
             o[Sparkle] = C(s.sparkleColor);
             o[Sparkle2] = new Vector4(s.sparkleDensity, s.sparkleSize * ppp, s.sparkleSpeed, 0f);
             o[Scan] = C(s.scanColor);
-            // направление сканера в UI: x вправо, y вверх по экрану (у прямоугольника фильтра y вниз)
+            // у прямоугольника фильтра y идёт вниз, направление в стиле — вверх по экрану
             var dir = new Vector2(s.scanDirection.x, -s.scanDirection.y);
             if (dir.sqrMagnitude < 1e-8f)
                 dir = new Vector2(0f, -1f);

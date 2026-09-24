@@ -11,15 +11,15 @@ namespace Exerussus.Outline.Lab
     /// </summary>
     public sealed class OutlineUiLabPanel : VisualElement
     {
-        private readonly OutlineStyle[] _styles;
-        private readonly OutlineStyle _hover;
+        private readonly OutlineUiStyle[] _styles;
+        private readonly OutlineUiStyle _hover;
         private readonly Dictionary<VisualElement, (OutlineUiHandle handle, int style)> _selected = new();
         private readonly Dictionary<VisualElement, OutlineUiHandle> _hovered = new();
 
-        public OutlineUiLabPanel(OutlineStyle hover, OutlineStyle[] styles, Texture2D icon)
+        public OutlineUiLabPanel(OutlineUiStyle hover, OutlineUiStyle[] styles, Texture2D icon)
         {
             _hover = hover;
-            _styles = styles ?? System.Array.Empty<OutlineStyle>();
+            _styles = styles ?? System.Array.Empty<OutlineUiStyle>();
             style.position = Position.Absolute;
             style.right = 24;
             style.bottom = 24;
