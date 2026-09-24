@@ -668,14 +668,26 @@ namespace Exerussus.Outline.Rendering
 
                     // MeshRenderer: углы локальных bounds в мире — у повёрнутого объекта прямоугольник заметно
                     // теснее, чем у мирового AABB; у SkinnedMeshRenderer локальные bounds живут в корневой кости
-                    _screenBounds = _layerBounds[layer];
-                    _boundsUnbounded = _layerUnbounded[layer];
-                    if (r is MeshRenderer)
-                        AccumulateBounds(camera, r.localBounds, r.localToWorldMatrix, pixelRect, sx, sy);
+                    var extent = r is MeshRenderer
+                        ? RendererRect(camera, r.localBounds, r.localToWorldMatrix, pixelRect, sx, sy, out var rect)
+                        : RendererRect(camera, r.bounds, Matrix4x4.identity, pixelRect, sx, sy, out rect);
+                    // вне кадра вместе со свечением (или целиком за камерой) — не рисуем нигде: ни маска,
+                    // ни координаты поверхности, ни цвет объекта, и прямоугольник работы слоя не растёт
+                    if (extent == RectExtent.Behind)
+                        continue;
+                    if (extent == RectExtent.Bounded)
+                    {
+                        float pad = _tables.LayerMaxRange(layer) + _settings.seamBlend + 2f;
+                        if (rect.z < -pad || rect.x > targetWidth + pad || rect.w < -pad || rect.y > targetHeight + pad)
+                            continue;
+                        var lb = _layerBounds[layer];
+                        _layerBounds[layer] = new Vector4(Mathf.Min(lb.x, rect.x), Mathf.Min(lb.y, rect.y),
+                            Mathf.Max(lb.z, rect.z), Mathf.Max(lb.w, rect.w));
+                    }
                     else
-                        AccumulateBounds(camera, r.bounds, Matrix4x4.identity, pixelRect, sx, sy);
-                    _layerBounds[layer] = _screenBounds;
-                    _layerUnbounded[layer] = _boundsUnbounded;
+                    {
+                        _layerUnbounded[layer] = true;
+                    }
 
                     r.GetSharedMaterials(_materialScratch);
                     int matCount = Mathf.Max(1, _materialScratch.Count);
@@ -696,13 +708,21 @@ namespace Exerussus.Outline.Rendering
             return false;
         }
 
-        private void AccumulateBounds(Camera camera, Bounds b, in Matrix4x4 toWorld, Rect pixelRect, float sx, float sy)
+        private enum RectExtent
         {
-            if (_boundsUnbounded)
-                return;
+            Bounded,   // прямоугольник на экране в px цели
+            Unbounded, // часть углов за камерой — проекция ненадёжна, считаем на весь кадр
+            Behind,    // все углы за камерой — объекта в кадре нет
+        }
+
+        private static RectExtent RendererRect(Camera camera, Bounds b, in Matrix4x4 toWorld, Rect pixelRect,
+            float sx, float sy, out Vector4 rect)
+        {
+            rect = new Vector4(float.MaxValue, float.MaxValue, float.MinValue, float.MinValue);
             var c = b.center;
             var e = b.extents;
             float near = camera.orthographic ? float.MinValue : camera.nearClipPlane;
+            int behind = 0;
             for (int k = 0; k < 8; k++)
             {
                 var corner = new Vector3(
@@ -712,17 +732,19 @@ namespace Exerussus.Outline.Rendering
                 var sp = camera.WorldToScreenPoint(toWorld.MultiplyPoint3x4(corner));
                 if (sp.z <= near)
                 {
-                    // угол за камерой — проекция ненадёжна, считаем на весь кадр
-                    _boundsUnbounded = true;
-                    return;
+                    behind++;
+                    continue;
                 }
                 float x = (sp.x - pixelRect.x) * sx;
                 float y = (sp.y - pixelRect.y) * sy;
-                _screenBounds.x = Mathf.Min(_screenBounds.x, x);
-                _screenBounds.y = Mathf.Min(_screenBounds.y, y);
-                _screenBounds.z = Mathf.Max(_screenBounds.z, x);
-                _screenBounds.w = Mathf.Max(_screenBounds.w, y);
+                rect.x = Mathf.Min(rect.x, x);
+                rect.y = Mathf.Min(rect.y, y);
+                rect.z = Mathf.Max(rect.z, x);
+                rect.w = Mathf.Max(rect.w, y);
             }
+            if (behind == 8)
+                return RectExtent.Behind;
+            return behind > 0 ? RectExtent.Unbounded : RectExtent.Bounded;
         }
 
         private static int SubmeshCount(Renderer r)

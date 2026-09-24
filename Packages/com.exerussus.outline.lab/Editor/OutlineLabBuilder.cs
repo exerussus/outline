@@ -268,6 +268,13 @@ namespace Exerussus.Outline.Lab.Editor
             var so = new SerializedObject(hud);
             so.FindProperty("feature").objectReferenceValue = feature;
             so.FindProperty("benchmark").objectReferenceValue = bench;
+            so.FindProperty("uiHoverStyle").objectReferenceValue = OutlineStylePresets.GetOrCreate("Hover");
+            var uiNames = new[] { "Selected", "Enemy", "Neon", "Fire", "Electric", "Rainbow", "Sparkle", "Scanner", "Hatched", "Textured" };
+            var uiStyles = so.FindProperty("uiStyles");
+            uiStyles.arraySize = uiNames.Length;
+            for (int i = 0; i < uiNames.Length; i++)
+                uiStyles.GetArrayElementAtIndex(i).objectReferenceValue = OutlineStylePresets.GetOrCreate(uiNames[i]);
+            so.FindProperty("uiIcon").objectReferenceValue = OutlineStylePresets.StarsTexture();
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 

@@ -135,6 +135,9 @@ namespace Exerussus.Outline.Rendering
         /// <summary>Выбрать слой, к которому относятся MaxRange, NeedsInnerField и прочие сводки.</summary>
         public void SetLayer(int layer) => _layer = layer;
 
+        /// <summary>Наибольшая дальность поля слоя, px кадра.</summary>
+        public float LayerMaxRange(int layer) => _lMaxRange[layer];
+
         /// <summary>Записей слоя в кадре.</summary>
         public int LayerActiveCount(int layer) => _lActive[layer];
 
@@ -389,8 +392,15 @@ namespace Exerussus.Outline.Rendering
             }
 
             bool surfaceSpace = space == OutlinePatternSpace.SurfaceObject || space == OutlinePatternSpace.SurfaceWorld;
-            bool usesSpace = style.pattern != OutlinePatternType.None || style.scanColor.a > 0f
-                || dissolveAmount > 0f || style.dissolveByFade || (style.fillTexture != null && style.fillTextureStrength > 0f);
+            // координаты поверхности нужны только тому, что рисуется внутри силуэта: паттерн заливки или
+            // внутреннего контура, текстура заливки, сканер, растворение (паттерн свечения строится как в Object)
+            var patLayers = style.patternLayers;
+            bool fillVisible = style.fillColor.a > 0f;
+            bool patternInside = style.pattern != OutlinePatternType.None
+                && ((fillVisible && (patLayers & OutlinePatternLayers.Fill) != 0)
+                    || (hasInner && (patLayers & OutlinePatternLayers.Inner) != 0));
+            bool usesSpace = patternInside || style.scanColor.a > 0f || dissolveAmount > 0f || style.dissolveByFade
+                || (fillVisible && style.fillTexture != null && style.fillTextureStrength > 0f);
             if (surfaceSpace && usesSpace)
             {
                 _lNeedsSurface[L] = true;

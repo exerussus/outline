@@ -405,6 +405,9 @@ namespace Exerussus.Outline.Lab.Editor
             return g;
         }
 
+        /// <summary>Текстура звёзд (иконка для панели UI площадки).</summary>
+        public static Texture2D StarsTexture() => GetOrCreateStarsTexture();
+
         /// <summary>Процедурная текстура для пресета Textured: звёзды на прозрачном фоне (PNG в Generated).</summary>
         private static Texture2D GetOrCreateStarsTexture()
         {
