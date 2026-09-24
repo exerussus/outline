@@ -315,8 +315,9 @@ namespace Exerussus.Outline
             if (s_FlashStyles.TryGetValue(color, out var cached) && cached != null)
                 return cached;
             var s = CreateStyle("OutlineFx Flash");
-            s.outerColor = new Color(color.r, color.g, color.b, color.a * 0.6f);
-            s.outerWidth = 4f;
+            // только заливка: слою без контура не нужно поле расстояний — вспышка почти бесплатна
+            s.outerColor = new Color(color.r, color.g, color.b, 0f);
+            s.outerWidth = 0f;
             s.fillColor = color;
             s.additive = 1f;
             s.occludedMode = OutlineOccludedMode.Hidden;

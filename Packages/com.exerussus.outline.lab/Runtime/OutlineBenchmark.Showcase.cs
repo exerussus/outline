@@ -35,6 +35,8 @@ namespace Exerussus.Outline.Lab
         [SerializeField, Min(0.5f), Tooltip("Замер одного стиля, с.")]
         private float showcaseSeconds = 2f;
         [SerializeField, Min(0f)] private float showcaseWarmup = 1f;
+        [SerializeField, Min(0f), Tooltip("Прогрев витрины до первого замера, с: частоты GPU успевают устояться, база первого яруса не завышена.")]
+        private float showcasePreheat = 8f;
         [SerializeField, Tooltip("Скорость вращения объектов витрины, град/с.")]
         private float showcaseSpin = 20f;
         [SerializeField, Tooltip("Разложение постоянной цены (пустой стиль, без сглаживания, …) — только на первом ярусе.")]
@@ -141,6 +143,10 @@ namespace Exerussus.Outline.Lab
                 yield return null;
             }
             HideItemHandles();
+            // прогрев площадки: кадр без подсветки крутится до стабильных частот
+            float until = Time.realtimeSinceStartup + showcasePreheat;
+            while (Time.realtimeSinceStartup < until)
+                yield return null;
             _capturing = false;
             _showcaseActive = true;
             StartItem(0);

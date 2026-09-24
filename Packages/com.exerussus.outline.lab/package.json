@@ -1,11 +1,11 @@
 {
   "name": "com.exerussus.outline.lab",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "displayName": "Exerussus Outline Lab",
   "description": "Площадка для com.exerussus.outline: сборщик тестовой сцены, пресеты стилей, демо-управление, HUD со статистикой, бенчмарк.",
   "unity": "6000.6",
   "dependencies": {
-    "com.exerussus.outline": "0.3.0",
+    "com.exerussus.outline": "0.4.0",
     "com.unity.inputsystem": "1.20.0",
     "com.unity.render-pipelines.universal": "17.6.0"
   },
