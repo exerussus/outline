@@ -262,6 +262,16 @@ void OutlineSpaceCoords(uint id, float2 p, bool onSurface, out float2 q, out flo
     if (space >= 2u && onSurface)
     {
         q = LOAD_TEXTURE2D(_OutlinePos, uint2(p)).xy;
+        // координаты пишутся без MSAA: пиксель края, центр которого не покрыт, остался пустым (0) — берём соседа
+        if (all(q == 0.0))
+        {
+            int2 ip = int2(p);
+            float2 n0 = LOAD_TEXTURE2D(_OutlinePos, uint2(ip + int2(1, 0))).xy;
+            float2 n1 = LOAD_TEXTURE2D(_OutlinePos, uint2(max(ip + int2(-1, 0), 0))).xy;
+            float2 n2 = LOAD_TEXTURE2D(_OutlinePos, uint2(ip + int2(0, 1))).xy;
+            float2 n3 = LOAD_TEXTURE2D(_OutlinePos, uint2(max(ip + int2(0, -1), 0))).xy;
+            q = any(n0 != 0.0) ? n0 : (any(n1 != 0.0) ? n1 : (any(n2 != 0.0) ? n2 : n3));
+        }
         hasPos = true;
     }
     else

@@ -41,6 +41,13 @@ namespace Exerussus.Outline.Lab
         private float showcaseSpin = 20f;
         [SerializeField, Tooltip("Разложение постоянной цены (пустой стиль, без сглаживания, …) — только на первом ярусе.")]
         private bool showcaseBreakdown = true;
+        [SerializeField, Tooltip("Этап «движение»: объект первого яруса вращается и ездит влево-вправо — видно, как ведут себя " +
+                                 "текстура и паттерн в каждом пространстве. Снимки в крайних точках (_a, _b) и в центре.")]
+        private bool showcaseMotion = true;
+        [SerializeField, Min(0f), Tooltip("Размах движения влево-вправо от исходной точки, м.")]
+        private float showcaseMotionAmplitude = 0.8f;
+        [SerializeField, Min(0.5f), Tooltip("Период движения (и длительность замера одного пункта этапа), с.")]
+        private float showcaseMotionPeriod = 4f;
 
         private struct ShowcaseItem
         {
@@ -49,6 +56,8 @@ namespace Exerussus.Outline.Lab
             public OutlineStyle Style; // null — база без подсветки
             public Action<Rendering.OutlineSettings> Tweak; // правка настроек фичи на время замера
             public Action<GameObject> Begin; // временный эффект: запуск на каждом объекте в начале замера
+            public bool Motion; // этап «движение»: объекты яруса ездят влево-вправо, своя база
+            public Action<float> Tick; // каждый кадр замера: время с начала пункта, с
             public bool IsBase => Style == null && Begin == null;
             public float Avg;
             public float P95;
@@ -68,6 +77,11 @@ namespace Exerussus.Outline.Lab
         private int _itemIndex;
         private int _activeTier = -1;
         private float _itemStart;
+        private readonly List<Vector3> _motionBase = new(4);
+        private Transform[] _motionObjects;
+        private bool _motionShotA;
+        private bool _motionShotB;
+        private int _skipSamples;
 
         private string ShowcaseStatus => _itemIndex < _items.Count
             ? $"витрина {_itemIndex + 1}/{_items.Count}: {TierName(_items[_itemIndex].Tier)} · {_items[_itemIndex].Name}"
@@ -172,6 +186,8 @@ namespace Exerussus.Outline.Lab
                     break;
                 }
             }
+            OutlineStyle surfaceProbe = null;
+            Texture2D motionTex = tex;
             for (int type = 1; type <= (int)OutlinePatternType.Texture; type++)
             {
                 var p = (OutlinePatternType)type;
@@ -190,6 +206,8 @@ namespace Exerussus.Outline.Lab
                 st.patternFill = 0.5f;
                 st.additive = 0.3f;
                 styles.Add(($"паттерн {p}", st));
+                if (p == OutlinePatternType.Hex)
+                    surfaceProbe = st;
             }
 
             float span = showcaseWarmup + showcaseSeconds;
@@ -203,10 +221,13 @@ namespace Exerussus.Outline.Lab
             };
 
             OutlineStyle selected = null;
+            OutlineStyle enemy = null;
             foreach (var st in showcaseStyles)
             {
                 if (st != null && st.name.EndsWith("Selected"))
                     selected = st;
+                if (st != null && st.name.EndsWith("Enemy"))
+                    enemy = st;
             }
 
             for (int tier = 0; tier < showcaseTiers.Length; tier++)
@@ -220,10 +241,151 @@ namespace Exerussus.Outline.Lab
                 if (selected != null)
                     _items.Add(new ShowcaseItem { Tier = tier, Name = "Selected + пульс (2 слоя)", Style = selected,
                         Begin = go => OutlineFx.Pulse(go, null, span * 1.6f, 0.6f) });
+                if (enemy != null && selected != null)
+                    AddStyleSwap(tier, selected, enemy);
                 if (tier == 0 && showcaseBreakdown)
                     AddBreakdown(tier);
+                if (showcaseBreakdown && surfaceProbe != null && (tier == 0 || tier == showcaseTiers.Length - 1))
+                    AddSurfaceBreakdown(tier, surfaceProbe);
             }
+            if (showcaseMotion)
+                AddMotionStage(motionTex);
             _items.Add(new ShowcaseItem { Tier = 0, Name = "без подсветки (повтор)" });
+        }
+
+        /// <summary>
+        /// Этап «движение»: один объект вращается и ездит влево-вправо. Заливка текстурой и паттерн в каждом
+        /// пространстве, пресеты с поверхностью или текстурой.
+        /// </summary>
+        private void AddMotionStage(Texture2D tex)
+        {
+            _items.Add(new ShowcaseItem { Tier = 0, Name = "движение: без подсветки", Motion = true });
+            var spaces = new[] { OutlinePatternSpace.Screen, OutlinePatternSpace.Object,
+                OutlinePatternSpace.SurfaceObject, OutlinePatternSpace.SurfaceWorld };
+            if (tex != null)
+            {
+                foreach (var space in spaces)
+                {
+                    var st = TempStyle($"Motion Fill {space}");
+                    st.outerColor = new Color(1.4f, 1.2f, 2f, 1f);
+                    st.outerWidth = 10f;
+                    st.fillColor = new Color(0.8f, 0.7f, 1.2f, 0.7f);
+                    st.fillTexture = tex;
+                    // экран — тайл в px, остальные пространства — в мировых единицах
+                    st.fillTextureTiling = space == OutlinePatternSpace.Screen ? 48f : 0.25f;
+                    st.fillTextureStrength = 1f;
+                    st.patternSpace = space;
+                    _items.Add(new ShowcaseItem { Tier = 0, Name = $"движение: заливка {space}", Style = st, Motion = true });
+                }
+            }
+            foreach (var space in spaces)
+            {
+                var st = TempStyle($"Motion Hex {space}");
+                st.outerColor = new Color(0.6f, 1.6f, 2.2f, 1f);
+                st.outerWidth = 10f;
+                st.fillColor = new Color(0.3f, 0.8f, 1f, 0.45f);
+                st.pattern = OutlinePatternType.Hex;
+                st.patternLayers = OutlinePatternLayers.All;
+                st.patternSpace = space;
+                st.patternScale = 14f;
+                st.patternWorldScale = 0.1f;
+                st.patternFill = 0.5f;
+                st.additive = 0.3f;
+                _items.Add(new ShowcaseItem { Tier = 0, Name = $"движение: паттерн Hex {space}", Style = st, Motion = true });
+            }
+            foreach (var st in showcaseStyles)
+            {
+                if (st == null)
+                    continue;
+                bool surface = st.patternSpace == OutlinePatternSpace.SurfaceObject || st.patternSpace == OutlinePatternSpace.SurfaceWorld;
+                if (surface || (st.fillTexture != null && st.fillTextureStrength > 0f))
+                    _items.Add(new ShowcaseItem { Tier = 0, Name = $"движение: {ShortName(st)}", Style = st, Motion = true });
+            }
+        }
+
+        /// <summary>Плавная смена стиля: каждую секунду Selected ↔ Enemy с переходом 0.5 с (в переходе запись считается дважды).</summary>
+        private void AddStyleSwap(int tier, OutlineStyle a, OutlineStyle b)
+        {
+            int flips = 0;
+            _items.Add(new ShowcaseItem { Tier = tier, Name = "смена стиля Selected ↔ Enemy", Style = a,
+                Tick = t =>
+                {
+                    int n = Mathf.FloorToInt(t);
+                    if (n == flips)
+                        return;
+                    flips = n;
+                    var target = (n & 1) == 1 ? b : a;
+                    foreach (var h in _itemHandles)
+                        h.SetStyle(target, 0.5f);
+                } });
+        }
+
+        /// <summary>
+        /// Разложение цены координат поверхности (Surface*): эталон в Object, полный путь и пути с отключёнными частями
+        /// (settings.surfaceDiag) и прежний путь через MSAA-цель, два круга подряд — видно разброс. Картинка в диагностических пунктах неверная.
+        /// </summary>
+        private void AddSurfaceBreakdown(int tier, OutlineStyle surface)
+        {
+            var obj = Instantiate(surface);
+            obj.hideFlags = HideFlags.HideAndDontSave;
+            obj.name = "Pattern Hex Object";
+            obj.patternSpace = OutlinePatternSpace.Object;
+            _tempStyles.Add(obj);
+            Action<Rendering.OutlineSettings> none = st => { };
+            Action<Rendering.OutlineSettings> noAA = st => { st.edgeAntialiasing = Rendering.OutlineEdgeAA.Off; st.edgeAntialiasingWebGL = Rendering.OutlineEdgeAA.Off; };
+            for (int round = 1; round <= 2; round++)
+            {
+                string r = round == 1 ? "" : " (2)";
+                _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: эталон Object" + r, Style = obj, Tweak = none });
+                _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: полная" + r, Style = surface, Tweak = none });
+                _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: без чтения" + r, Style = surface,
+                    Tweak = st => st.surfaceDiag = Rendering.OutlineSurfaceDiag.NoRead });
+                _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: без записи" + r, Style = surface,
+                    Tweak = st => st.surfaceDiag = Rendering.OutlineSurfaceDiag.NoWrite });
+                _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: прежняя MSAA-цель" + r, Style = surface,
+                    Tweak = st => st.surfaceDiag = Rendering.OutlineSurfaceDiag.MsaaTarget });
+            }
+            _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: эталон Object, без сглаж.", Style = obj, Tweak = noAA });
+            _items.Add(new ShowcaseItem { Tier = tier, Name = "поверхность: полная, без сглаж.", Style = surface, Tweak = noAA });
+        }
+
+        private float ItemSeconds(in ShowcaseItem item) => item.Motion ? showcaseMotionPeriod : showcaseSeconds;
+
+        // смещение объекта этапа «движение»: фаза 0 — начало замера, 0.25 и 0.75 — крайние точки
+        private void ApplyMotion(float t)
+        {
+            if (_motionObjects == null)
+                return;
+            float phase = (t - showcaseWarmup) / showcaseMotionPeriod;
+            var right = viewCamera.transform.right;
+            right.y = 0f;
+            right = right.sqrMagnitude > 1e-6f ? right.normalized : Vector3.right;
+            var offset = right * (showcaseMotionAmplitude * Mathf.Sin(phase * 2f * Mathf.PI));
+            for (int i = 0; i < _motionObjects.Length && i < _motionBase.Count; i++)
+            {
+                if (_motionObjects[i] != null)
+                    _motionObjects[i].position = _motionBase[i] + offset;
+            }
+        }
+
+        private void RestoreMotion()
+        {
+            if (_motionObjects == null)
+                return;
+            for (int i = 0; i < _motionObjects.Length && i < _motionBase.Count; i++)
+            {
+                if (_motionObjects[i] != null)
+                    _motionObjects[i].position = _motionBase[i];
+            }
+            _motionObjects = null;
+            _motionBase.Clear();
+        }
+
+        private static string ShortName(OutlineStyle st)
+        {
+            string n = st.name;
+            int dot = n.LastIndexOf('_');
+            return dot >= 0 && dot + 1 < n.Length ? n.Substring(dot + 1) : n;
         }
 
         /// <summary>Разложение постоянной цены: пустой стиль (запись есть, рисовать нечего) и варианты настроек.</summary>
@@ -320,9 +482,20 @@ namespace Exerussus.Outline.Lab
             _lastStats = default;
             HideItemHandles();
             RestoreFx();
+            RestoreMotion();
 
             var item = _items[index];
             ActivateTier(item.Tier);
+            _motionShotA = false;
+            _motionShotB = false;
+            _skipSamples = 0;
+            if (item.Motion)
+            {
+                _motionObjects = showcaseTiers[item.Tier].objects;
+                _motionBase.Clear();
+                foreach (var o in _motionObjects)
+                    _motionBase.Add(o != null ? o.position : Vector3.zero);
+            }
             JsonUtility.FromJsonOverwrite(_savedSettings, feature.settings);
             feature.settings.debugView = Rendering.OutlineDebugView.None;
             item.Tweak?.Invoke(feature.settings);
@@ -353,7 +526,32 @@ namespace Exerussus.Outline.Lab
             }
 
             float t = Time.realtimeSinceStartup - _itemStart;
-            if (t >= showcaseWarmup && _count < MaxSamples)
+            var current = _items[_itemIndex];
+            current.Tick?.Invoke(t);
+            if (current.Motion)
+            {
+                ApplyMotion(t);
+                // снимки в крайних точках — без остановки замера; кадры со снимком в замер не идут
+                float phase = (t - showcaseWarmup) / showcaseMotionPeriod;
+                if (_shotDir != null && !current.IsBase)
+                {
+                    if (!_motionShotA && phase >= 0.25f)
+                    {
+                        _motionShotA = true;
+                        StartCoroutine(CaptureMotionShot(_itemIndex, "a"));
+                    }
+                    if (!_motionShotB && phase >= 0.75f)
+                    {
+                        _motionShotB = true;
+                        StartCoroutine(CaptureMotionShot(_itemIndex, "b"));
+                    }
+                }
+            }
+            if (_skipSamples > 0)
+            {
+                _skipSamples--;
+            }
+            else if (t >= showcaseWarmup && _count < MaxSamples)
             {
                 int i = _count++;
                 _frame[i] = Time.unscaledDeltaTime * 1000f;
@@ -363,7 +561,7 @@ namespace Exerussus.Outline.Lab
                 if (s.Rendered)
                     _lastStats = s;
             }
-            if (t < showcaseWarmup + showcaseSeconds)
+            if (t < showcaseWarmup + ItemSeconds(current))
                 return;
 
             var item = _items[_itemIndex];
@@ -405,10 +603,7 @@ namespace Exerussus.Outline.Lab
                 var tex = ScreenCapture.CaptureScreenshotAsTexture();
                 try
                 {
-                    var it = _items[index];
-                    int count = showcaseTiers[it.Tier].objects?.Length ?? 0;
-                    string name = it.Name.Replace(' ', '_').Replace(",", "").Replace('×', 'x');
-                    File.WriteAllBytes(Path.Combine(_shotDir, $"S{index:000}_x{count}_{name}.png"), tex.EncodeToPNG());
+                    File.WriteAllBytes(Path.Combine(_shotDir, ShotName(index, null)), tex.EncodeToPNG());
                     _shotCount++;
                 }
                 catch (Exception e)
@@ -427,6 +622,37 @@ namespace Exerussus.Outline.Lab
                 AdvanceShowcase();
         }
 
+        private string ShotName(int index, string suffix)
+        {
+            var it = _items[index];
+            int count = showcaseTiers[it.Tier].objects?.Length ?? 0;
+            string name = it.Name.Replace(' ', '_').Replace(",", "").Replace(":", "").Replace('×', 'x');
+            return suffix == null ? $"S{index:000}_x{count}_{name}.png" : $"S{index:000}_x{count}_{name}_{suffix}.png";
+        }
+
+        /// <summary>Снимок посреди замера (этап «движение»): Update не останавливается, пара кадров выбрасывается.</summary>
+        private IEnumerator CaptureMotionShot(int index, string suffix)
+        {
+            yield return new WaitForEndOfFrame();
+            if (!_running || _shotDir == null || _itemIndex != index)
+                yield break;
+            var tex = ScreenCapture.CaptureScreenshotAsTexture();
+            try
+            {
+                File.WriteAllBytes(Path.Combine(_shotDir, ShotName(index, suffix)), tex.EncodeToPNG());
+                _shotCount++;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[OutlineBenchmark] Не удалось сохранить снимок: {e.Message}");
+            }
+            finally
+            {
+                Destroy(tex);
+            }
+            _skipSamples = 2;
+        }
+
         /// <summary>Вернуть сцену: снять подсветки и эффекты витрины, включить объекты, цели и демо.</summary>
         private void EndShowcase()
         {
@@ -435,6 +661,7 @@ namespace Exerussus.Outline.Lab
             _showcaseActive = false;
             HideItemHandles();
             RestoreFx();
+            RestoreMotion();
             foreach (var o in _allShowcase)
             {
                 if (o != null)
@@ -459,13 +686,15 @@ namespace Exerussus.Outline.Lab
         }
 
         /// <summary>База яруса — среднее по его замерам «без подсветки».</summary>
-        private float TierBaseline(int tier, out bool has)
+        private float TierBaseline(int tier, out bool has) => TierBaseline(tier, false, out has);
+
+        private float TierBaseline(int tier, bool motion, out bool has)
         {
             float sum = 0f;
             int n = 0;
             foreach (var it in _items)
             {
-                if (it.Tier == tier && it.IsBase && it.Samples > 0)
+                if (it.Tier == tier && it.Motion == motion && it.IsBase && it.Samples > 0)
                 {
                     sum += it.Avg;
                     n++;
@@ -484,19 +713,25 @@ namespace Exerussus.Outline.Lab
             _log.Append("#\n# Витрина: ").Append(showcaseWarmup.ToString(inv)).Append(" с прогрев + ")
                 .Append(showcaseSeconds.ToString(inv)).Append(" с замер на стиль; прирост — к базе своего яруса\n");
             _log.Append("# колонки: кадр avg/p95 мс | прирост, мс | CPU записи, мс | масштаб, кроп, проходы, стоимость, aa, записей\n");
-            int lastTier = -1;
+            int lastSection = -1;
             for (int i = 0; i < _items.Count; i++)
             {
                 var it = _items[i];
                 if (it.Samples == 0)
                     continue;
-                if (it.Tier != lastTier)
+                int section = it.Motion ? 1000 : it.Tier;
+                if (section != lastSection)
                 {
-                    lastTier = it.Tier;
+                    lastSection = section;
                     int count = showcaseTiers[it.Tier].objects?.Length ?? 0;
-                    _log.Append("## ").Append(TierName(it.Tier)).Append(" (объектов: ").Append(count).Append(")\n");
+                    if (it.Motion)
+                        _log.Append("## движение: ").Append(TierName(it.Tier)).Append(", влево-вправо ±")
+                            .Append(showcaseMotionAmplitude.ToString("0.##", inv)).Append(" м за ")
+                            .Append(showcaseMotionPeriod.ToString("0.##", inv)).Append(" с; снимки _a и _b — крайние точки, без суффикса — центр\n");
+                    else
+                        _log.Append("## ").Append(TierName(it.Tier)).Append(" (объектов: ").Append(count).Append(")\n");
                 }
-                float baseline = TierBaseline(it.Tier, out bool hasBase);
+                float baseline = TierBaseline(it.Tier, it.Motion, out bool hasBase);
                 _log.Append("[S").Append(i.ToString("000")).Append("] ").Append(it.Name.PadRight(26)).Append(" | ")
                     .Append(it.Avg.ToString("0.00", inv)).Append('/').Append(it.P95.ToString("0.00", inv));
                 if (!it.IsBase && hasBase)
@@ -519,6 +754,7 @@ namespace Exerussus.Outline.Lab
             }
 
             AppendSummary(inv);
+            AppendSurfaceBreakdown(inv);
 
             int first = 0, last = _items.Count - 1;
             if (_items[first].Samples > 0 && _items[last].Samples > 0 && _items[last].IsBase)
@@ -526,6 +762,49 @@ namespace Exerussus.Outline.Lab
                 _log.Append("# дрейф базы витрины: ").Append(_items[first].Avg.ToString("0.00", inv)).Append(" → ")
                     .Append(_items[last].Avg.ToString("0.00", inv)).Append(" мс\n");
             }
+        }
+
+        /// <summary>Цена частей пути координат поверхности по ярусам — разности пунктов «поверхность: …», среднее двух кругов.</summary>
+        private void AppendSurfaceBreakdown(CultureInfo inv)
+        {
+            bool header = false;
+            for (int t = 0; t < showcaseTiers.Length; t++)
+            {
+                float obj = SurfaceAvg(t, "поверхность: эталон Object");
+                float full = SurfaceAvg(t, "поверхность: полная");
+                float noRead = SurfaceAvg(t, "поверхность: без чтения");
+                float noWrite = SurfaceAvg(t, "поверхность: без записи");
+                float legacy = SurfaceAvg(t, "поверхность: прежняя MSAA-цель");
+                if (obj < 0f || full < 0f || noRead < 0f || noWrite < 0f || legacy < 0f)
+                    continue;
+                if (!header)
+                {
+                    _log.Append("#\n# Поверхность: цена частей, мс (полная − эталон Object = чтение + запись + прочее; прежняя — MSAA-цель маски)\n");
+                    header = true;
+                }
+                _log.Append("  ").Append(TierName(t).PadRight(12))
+                    .Append(" | всего ").Append((full - obj).ToString("+0.00;-0.00", inv))
+                    .Append(" | чтение ").Append((full - noRead).ToString("+0.00;-0.00", inv))
+                    .Append(" | запись ").Append((full - noWrite).ToString("+0.00;-0.00", inv))
+                    .Append(" | прочее ").Append((noWrite - obj).ToString("+0.00;-0.00", inv))
+                    .Append(" | прежняя всего ").Append((legacy - obj).ToString("+0.00;-0.00", inv)).Append('\n');
+            }
+        }
+
+        // среднее кадра по пунктам яруса с этим именем (оба круга); -1 — нет замеров
+        private float SurfaceAvg(int tier, string name)
+        {
+            float sum = 0f;
+            int n = 0;
+            foreach (var it in _items)
+            {
+                if (it.Tier == tier && !it.Motion && it.Samples > 0 && (it.Name == name || it.Name == name + " (2)"))
+                {
+                    sum += it.Avg;
+                    n++;
+                }
+            }
+            return n > 0 ? sum / n : -1f;
         }
 
         /// <summary>Сводка: прирост каждого стиля по ярусам в одной строке.</summary>
@@ -545,7 +824,7 @@ namespace Exerussus.Outline.Lab
             var seen = new HashSet<string>();
             foreach (var it in _items)
             {
-                if (it.IsBase || it.Tweak != null || !seen.Add(it.Name))
+                if (it.IsBase || it.Tweak != null || it.Motion || !seen.Add(it.Name))
                     continue;
                 _log.Append("  ").Append(it.Name.PadRight(26));
                 for (int t = 0; t < tiers; t++)
@@ -553,7 +832,7 @@ namespace Exerussus.Outline.Lab
                     string cell = "—";
                     foreach (var x in _items)
                     {
-                        if (x.Tier == t && x.Name == it.Name && x.Tweak == null && x.Samples > 0 && hasBase[t])
+                        if (x.Tier == t && x.Name == it.Name && x.Tweak == null && !x.Motion && x.Samples > 0 && hasBase[t])
                         {
                             cell = "+" + (x.Avg - baselines[t]).ToString("0.00", inv);
                             break;

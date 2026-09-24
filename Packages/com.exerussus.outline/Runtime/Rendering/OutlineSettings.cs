@@ -64,6 +64,8 @@ namespace Exerussus.Outline.Rendering
 
         [Header("Отладка")]
         public OutlineDebugView debugView = OutlineDebugView.None;
+        [Tooltip("Диагностика цены координат поверхности для бенчмарка. В режимах, кроме None, картинка неверная.")]
+        public OutlineSurfaceDiag surfaceDiag = OutlineSurfaceDiag.None;
         public bool renderInSceneView = true;
 
         public float EffectiveFieldScale => IsWebGL ? fieldScaleWebGL : fieldScale;

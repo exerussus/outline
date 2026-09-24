@@ -352,6 +352,8 @@ namespace Exerussus.Outline.Rendering
 
             // координаты развёртки поверхности для паттернов Surface*: RG16F
             bool surface = _tables.NeedsSurface;
+            var diag = samples > 1 ? _settings.surfaceDiag : OutlineSurfaceDiag.None;
+            bool diagNoWrite = diag == OutlineSurfaceDiag.NoWrite;
             var posDesc = new TextureDesc(width, height)
             {
                 name = "_OutlinePos",
@@ -361,7 +363,8 @@ namespace Exerussus.Outline.Rendering
                 clearBuffer = !scissorClear,
                 clearColor = Color.clear,
             };
-            var pos = surface ? renderGraph.CreateTexture(posDesc) : TextureHandle.nullHandle;
+            // диагностика без записи: цели координат нет, композит читает заглушку
+            var pos = surface && !diagNoWrite ? renderGraph.CreateTexture(posDesc) : TextureHandle.nullHandle;
 
             var depthDesc = new TextureDesc(width, height)
             {
@@ -404,8 +407,11 @@ namespace Exerussus.Outline.Rendering
                 msDepthDesc.name = "_OutlineMaskDepthMS";
                 msDepthDesc.msaaSamples = (MSAASamples)samples;
                 var maskDepthMS = renderGraph.CreateTexture(msDepthDesc);
+                // координаты поверхности: отдельный проход без MSAA (вторая цель MSAA-маски на встроенных GPU
+                // стоит ~0.75 мс); прежний путь — диагностика MsaaTarget
+                bool msaaTarget = diag == OutlineSurfaceDiag.MsaaTarget;
                 var posMS = TextureHandle.nullHandle;
-                if (surface)
+                if (surface && msaaTarget)
                 {
                     var posMsDesc = posDesc;
                     posMsDesc.name = "_OutlinePosMS";
@@ -416,6 +422,8 @@ namespace Exerussus.Outline.Rendering
                 RecordMask(renderGraph, resourceData, maskMS, maskDepthMS, posMS, maskScissor);
                 // резолв пишет каждый пиксель прямоугольника — обычной маске очистка не нужна
                 RecordResolve(renderGraph, maskMS, mask, posMS, pos, samples, maskScissor);
+                if (pos.IsValid() && !msaaTarget)
+                    RecordSurface(renderGraph, pos, depthDesc, maskScissor);
             }
             else
             {
@@ -772,6 +780,47 @@ namespace Exerussus.Outline.Rendering
                 }
                 if (d.Surface)
                     ctx.cmd.DisableKeyword(d.SurfaceKeyword);
+            });
+        }
+
+        private sealed class SurfacePassData
+        {
+            public List<DrawItem> Draws;
+            public OutlineGpuTables Tables;
+            public float[] ObjectSpace;
+            public Rect ClearRect;
+            public Material ClearMaterial;
+        }
+
+        /// <summary>
+        /// Координаты развёртки поверхности без MSAA: рендереры записей с Surface* ещё раз, проход OutlineSurface
+        /// материала-двойника, своя глубина.
+        /// </summary>
+        private void RecordSurface(RenderGraph renderGraph, TextureHandle pos, TextureDesc depthDesc, Rect clearRect)
+        {
+            using var builder = renderGraph.AddRasterRenderPass<SurfacePassData>("Outline Surface", out var data, _maskSampler);
+            data.Draws = _draws;
+            data.Tables = _tables;
+            data.ObjectSpace = _tables.SurfaceObjectSpace;
+            data.ClearRect = clearRect;
+            data.ClearMaterial = _jfaMaterial;
+            depthDesc.name = "_OutlineSurfaceDepth";
+            var depth = renderGraph.CreateTexture(depthDesc);
+            builder.SetRenderAttachment(pos, 0, AccessFlags.Write);
+            builder.SetRenderAttachmentDepth(depth, AccessFlags.Write);
+            builder.AllowGlobalStateModification(true);
+            builder.AllowPassCulling(false);
+            builder.SetRenderFunc(static (SurfacePassData d, RasterGraphContext ctx) =>
+            {
+                ClearScissored(ctx.cmd, d.ClearRect, d.ClearMaterial);
+                ctx.cmd.SetGlobalFloatArray(OutlineShaderIds.MaskObjectSpace, d.ObjectSpace);
+                var draws = d.Draws;
+                for (int i = 0; i < draws.Count; i++)
+                {
+                    var item = draws[i];
+                    if (item.Renderer != null && d.Tables.IsSurfaceEntry(item.Entry))
+                        ctx.cmd.DrawRenderer(item.Renderer, item.Material, item.Submesh, OutlineShaderIds.PassMaskSurface);
+                }
             });
         }
 

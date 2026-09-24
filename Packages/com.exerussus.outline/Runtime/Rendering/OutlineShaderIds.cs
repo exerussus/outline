@@ -33,5 +33,8 @@ namespace Exerussus.Outline.Rendering
         public const int PassInitDual = 2;
         public const int PassStepDual = 3;
         public const int PassClear = 4;
+
+        // проходы шейдера маски
+        public const int PassMaskSurface = 2;
     }
 }

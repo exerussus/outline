@@ -60,6 +60,7 @@ namespace Exerussus.Outline.Rendering
         private readonly Vector4[] _entries = new Vector4[Rows];
         private readonly float[] _surfaceObjectSpace = new float[Rows];
         private readonly bool[] _seeThrough = new bool[Rows];
+        private readonly bool[] _surfaceEntry = new bool[Rows];
 
         // параметры текущего кадра (камера, масштабы) — общие для всех записей
         private struct FrameContext
@@ -82,8 +83,6 @@ namespace Exerussus.Outline.Rendering
         // строки для плавной смены стиля
         private readonly float[] _rowPrev = new float[Columns * 4];
         private readonly float[] _rowCur = new float[Columns * 4];
-        private readonly byte[] _lutPrev = new byte[LutWidth * 2];
-        private readonly ushort[] _rampPrev = new ushort[LutWidth * 2 * 4];
 
         public Texture Data => _data;
 
@@ -110,6 +109,9 @@ namespace Exerussus.Outline.Rendering
 
         /// <summary>Для маски: 1 — позиция поверхности в координатах объекта, 0 — мира (по id записи).</summary>
         public float[] SurfaceObjectSpace => _surfaceObjectSpace;
+
+        /// <summary>Записи нужны координаты поверхности (паттерн, сканер, растворение или текстура в Surface*).</summary>
+        public bool IsSurfaceEntry(int id) => _surfaceEntry[id];
 
         /// <summary>Есть запись в режиме прозрачности/маскировки — нужна копия фона.</summary>
         public bool NeedsBackground => _lNeedsBackground[_layer];
@@ -180,6 +182,7 @@ namespace Exerussus.Outline.Rendering
             Array.Clear(_entries, 0, _entries.Length);
             Array.Clear(_surfaceObjectSpace, 0, _surfaceObjectSpace.Length);
             Array.Clear(_seeThrough, 0, _seeThrough.Length);
+            Array.Clear(_surfaceEntry, 0, _surfaceEntry.Length);
             Array.Clear(_lMaxInnerRange, 0, _lMaxInnerRange.Length);
             Array.Clear(_lMaxRange, 0, _lMaxRange.Length);
             Array.Clear(_lNeedsInnerField, 0, _lNeedsInnerField.Length);
@@ -358,7 +361,11 @@ namespace Exerussus.Outline.Rendering
             float angle = style.patternAngle * Mathf.Deg2Rad;
             // якорь (всегда: нужен и для эффектов по углу вокруг объекта): центр первого рендерера на экране,
             // px кадра (y снизу, как SV_Position цели), и пикселей на мировую единицу на его глубине
-            var spaceData = new Vector4((float)space, targetWidth * 0.5f, targetHeight * 0.5f, 1f);
+            // диагностика NoRead: композит не читает координаты поверхности, паттерн строится как в Object
+            var shaderSpace = settings.surfaceDiag == OutlineSurfaceDiag.NoRead
+                && (space == OutlinePatternSpace.SurfaceObject || space == OutlinePatternSpace.SurfaceWorld)
+                ? OutlinePatternSpace.Object : space;
+            var spaceData = new Vector4((float)shaderSpace, targetWidth * 0.5f, targetHeight * 0.5f, 1f);
             var anchorRenderer = OutlineApi.GetFirstRenderer(id);
             if (anchorRenderer != null)
             {
@@ -366,7 +373,7 @@ namespace Exerussus.Outline.Rendering
                 var vp = camera.WorldToViewportPoint(center);
                 float depth = Mathf.Max(camera.nearClipPlane, vp.z);
                 float pxPerUnit = ortho ? pxPerUnitK : pxPerUnitK / depth;
-                spaceData = new Vector4((float)space, vp.x * targetWidth, vp.y * targetHeight, Mathf.Max(1e-3f, pxPerUnit));
+                spaceData = new Vector4((float)shaderSpace, vp.x * targetWidth, vp.y * targetHeight, Mathf.Max(1e-3f, pxPerUnit));
 
                 if (space == OutlinePatternSpace.Object)
                 {
@@ -387,6 +394,7 @@ namespace Exerussus.Outline.Rendering
             if (surfaceSpace && usesSpace)
             {
                 _lNeedsSurface[L] = true;
+                _surfaceEntry[id] = true;
                 _surfaceObjectSpace[id] = space == OutlinePatternSpace.SurfaceObject ? 1f : 0f;
             }
 
@@ -472,47 +480,118 @@ namespace Exerussus.Outline.Rendering
 
         private void Pick(int o, int i, bool target) => _dataBuf[o + i] = target ? _rowCur[i] : _rowPrev[i];
 
-        // solidOuter: у стиля без градиента по ширине строка градиента — его цвет свечения (для смешивания)
-        private void BakeStyle(OutlineStyle style, int id, bool solidOuter = false)
+        private void BakeStyle(OutlineStyle style, int id)
         {
             BakeCurve(style.outerCurve, id * 2);
             BakeCurve(style.innerCurve, id * 2 + 1);
-            if (solidOuter && !style.useOuterGradient)
-                BakeSolid(style.outerColor, id * 2, _f.Linear);
-            else
-                BakeGradient(style.outerGradient, id * 2, _f.Linear);
+            BakeGradient(style.outerGradient, id * 2, _f.Linear);
             BakeGradient(style.contourGradient, id * 2 + 1, _f.Linear);
         }
 
-        private void BakeSolid(Color c, int row, bool linear)
+        // запечённые кривые и градиенты стиля во float — для смешивания без повторного Evaluate каждый кадр
+        private sealed class StyleBake
         {
-            int o = row * LutWidth * 4;
-            var l = linear ? c.linear : c;
-            ushort r = Mathf.FloatToHalf(l.r), g = Mathf.FloatToHalf(l.g), b = Mathf.FloatToHalf(l.b), a = Mathf.FloatToHalf(1f);
+            public int Version = int.MinValue;
+            public bool Linear;
+            public readonly float[] Lut = new float[LutWidth * 2];      // внешняя, внутренняя кривая
+            public readonly float[] Ramp = new float[LutWidth * 2 * 4]; // градиент по ширине, по контуру
+            public Vector4 Solid;                                       // цвет свечения (строка «без градиента»)
+        }
+
+        private readonly System.Collections.Generic.Dictionary<OutlineStyle, StyleBake> _bakes = new(8);
+        // результат последнего смешивания: одинаковые переходы (одна пара стилей, одно время) считаются один раз
+        private readonly byte[] _blendLut = new byte[LutWidth * 2];
+        private readonly ushort[] _blendRamp = new ushort[LutWidth * 2 * 4];
+        private OutlineStyle _blendPrev, _blendStyle;
+        private int _blendPrevVersion, _blendStyleVersion;
+        private float _blendT = -1f;
+        private bool _blendLinear;
+
+        private StyleBake GetBake(OutlineStyle style)
+        {
+            if (!_bakes.TryGetValue(style, out var b))
+            {
+                if (_bakes.Count >= 32)
+                    _bakes.Clear();
+                b = new StyleBake();
+                _bakes.Add(style, b);
+            }
+            if (b.Version == style.Version && b.Linear == _f.Linear)
+                return b;
+            b.Version = style.Version;
+            b.Linear = _f.Linear;
+            EvaluateCurve(style.outerCurve, b.Lut, 0);
+            EvaluateCurve(style.innerCurve, b.Lut, LutWidth);
+            EvaluateGradient(style.outerGradient, b.Ramp, 0, _f.Linear);
+            EvaluateGradient(style.contourGradient, b.Ramp, LutWidth * 4, _f.Linear);
+            var c = _f.Linear ? style.outerColor.linear : style.outerColor;
+            b.Solid = new Vector4(c.r, c.g, c.b, 1f);
+            return b;
+        }
+
+        private static void EvaluateCurve(AnimationCurve curve, float[] dst, int o)
+        {
+            bool valid = curve != null && curve.length > 0;
             for (int i = 0; i < LutWidth; i++)
             {
-                _rampBuf[o + i * 4] = r;
-                _rampBuf[o + i * 4 + 1] = g;
-                _rampBuf[o + i * 4 + 2] = b;
-                _rampBuf[o + i * 4 + 3] = a;
+                float t = i / (float)(LutWidth - 1);
+                dst[o + i] = Mathf.Clamp01(valid ? curve.Evaluate(t) : 1f - t);
             }
         }
 
-        // кривые и градиенты обоих стилей смешиваются построчно
+        private static void EvaluateGradient(Gradient gradient, float[] dst, int o, bool linear)
+        {
+            for (int i = 0; i < LutWidth; i++)
+            {
+                float t = i / (float)(LutWidth - 1);
+                var c = gradient != null ? gradient.Evaluate(t) : Color.white;
+                var l = linear ? c.linear : c;
+                dst[o + i * 4] = l.r;
+                dst[o + i * 4 + 1] = l.g;
+                dst[o + i * 4 + 2] = l.b;
+                dst[o + i * 4 + 3] = c.a;
+            }
+        }
+
+        // кривые и градиенты обоих стилей смешиваются построчно; запечённое кэшируется по стилю,
+        // смешанное — по паре стилей и доле перехода
         private void BlendLuts(int id, OutlineStyle prev, OutlineStyle style, float t)
         {
-            int lo = id * 2 * LutWidth;
-            int ro = id * 2 * LutWidth * 4;
-            bool gradient = prev.useOuterGradient || style.useOuterGradient;
-            BakeStyle(prev, id, gradient);
-            Array.Copy(_lutBuf, lo, _lutPrev, 0, _lutPrev.Length);
-            Array.Copy(_rampBuf, ro, _rampPrev, 0, _rampPrev.Length);
-            BakeStyle(style, id, gradient);
-            for (int i = 0; i < _lutPrev.Length; i++)
-                _lutBuf[lo + i] = (byte)(Mathf.Lerp(_lutPrev[i], _lutBuf[lo + i], t) + 0.5f);
-            for (int i = 0; i < _rampPrev.Length; i++)
-                _rampBuf[ro + i] = Mathf.FloatToHalf(Mathf.Lerp(
-                    Mathf.HalfToFloat(_rampPrev[i]), Mathf.HalfToFloat(_rampBuf[ro + i]), t));
+            bool same = ReferenceEquals(prev, _blendPrev) && ReferenceEquals(style, _blendStyle) && t == _blendT
+                && prev.Version == _blendPrevVersion && style.Version == _blendStyleVersion && _f.Linear == _blendLinear;
+            if (!same)
+            {
+                var a = GetBake(prev);
+                var b = GetBake(style);
+                for (int i = 0; i < _blendLut.Length; i++)
+                    _blendLut[i] = (byte)(Mathf.LerpUnclamped(a.Lut[i], b.Lut[i], t) * 255f + 0.5f);
+
+                // строка по ширине: у стиля без градиента — его цвет свечения, если градиент есть хоть у одного
+                bool gradient = prev.useOuterGradient || style.useOuterGradient;
+                bool solidA = gradient && !prev.useOuterGradient;
+                bool solidB = gradient && !style.useOuterGradient;
+                for (int i = 0; i < LutWidth; i++)
+                {
+                    for (int k = 0; k < 4; k++)
+                    {
+                        int j = i * 4 + k;
+                        float va = solidA ? a.Solid[k] : a.Ramp[j];
+                        float vb = solidB ? b.Solid[k] : b.Ramp[j];
+                        _blendRamp[j] = Mathf.FloatToHalf(Mathf.LerpUnclamped(va, vb, t));
+                    }
+                }
+                for (int j = LutWidth * 4; j < _blendRamp.Length; j++)
+                    _blendRamp[j] = Mathf.FloatToHalf(Mathf.LerpUnclamped(a.Ramp[j], b.Ramp[j], t));
+
+                _blendPrev = prev;
+                _blendStyle = style;
+                _blendT = t;
+                _blendPrevVersion = prev.Version;
+                _blendStyleVersion = style.Version;
+                _blendLinear = _f.Linear;
+            }
+            Array.Copy(_blendLut, 0, _lutBuf, id * 2 * LutWidth, _blendLut.Length);
+            Array.Copy(_blendRamp, 0, _rampBuf, id * 2 * LutWidth * 4, _blendRamp.Length);
         }
 
         public void Dispose()
