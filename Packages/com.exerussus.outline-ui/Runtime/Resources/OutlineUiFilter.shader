@@ -172,26 +172,36 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
                 return res;
             }
 
+            // направление k из 8 (оси, затем диагонали). Без локального static const массива: компилятор D3D11
+            // обнулял его, и край внутрь не находился никогда
+            float2 InsideDir(int k)
+            {
+                float2 axis = float2((k & 1) ? -1.0 : 1.0, 0.0);
+                if (k >= 2 && k < 4)
+                    axis = float2(0.0, (k & 1) ? -1.0 : 1.0);
+                if (k >= 4)
+                    axis = float2((k & 1) ? -0.7071 : 0.7071, k >= 6 ? -0.7071 : 0.7071);
+                return axis;
+            }
+
             // расстояние внутрь до края (px): поиск прозрачного пикселя по 8 направлениям, не дальше maxDist
             float InsideDistance(OlRect r, float2 p, float maxDist)
             {
-                static const float2 dirs[8] = { float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1),
-                                         float2(0.7071, 0.7071), float2(-0.7071, 0.7071),
-                                         float2(0.7071, -0.7071), float2(-0.7071, -0.7071) };
                 int steps = (int)ceil(maxDist);
                 // дальше maxDist края нет — внутренний контур здесь не виден
                 bool any0 = false;
                 [unroll]
                 for (int k = 0; k < 8; k++)
-                    any0 = any0 || !OlOccupied(OlLoad(r, p + dirs[k] * steps));
+                    any0 = any0 || !OlOccupied(OlLoad(r, p + InsideDir(k) * steps));
                 if (!any0)
                     return 1e5;
+                [loop]
                 for (int s = 1; s <= steps; s++)
                 {
                     [unroll]
                     for (int k = 0; k < 8; k++)
                     {
-                        if (!OlOccupied(OlLoad(r, p + dirs[k] * s)))
+                        if (!OlOccupied(OlLoad(r, p + InsideDir(k) * s)))
                             return s - 0.5;
                     }
                 }
