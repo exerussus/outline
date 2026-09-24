@@ -327,7 +327,8 @@ namespace Exerussus.Outline.Lab.Editor
                 s.outerColor = new Color(1.4f, 1.2f, 2f, 1f);
                 s.outerWidth = 12f;
                 s.fillColor = new Color(0.8f, 0.7f, 1.2f, 0.6f);
-                s.patternSpace = OutlinePatternSpace.Object;
+                // заливка держится за поверхность; паттерн свечения (снаружи силуэта) — в пространстве объекта
+                s.patternSpace = OutlinePatternSpace.SurfaceObject;
                 s.pattern = OutlinePatternType.Texture;
                 s.patternTexture = tex;
                 s.patternLayers = OutlinePatternLayers.Outer;

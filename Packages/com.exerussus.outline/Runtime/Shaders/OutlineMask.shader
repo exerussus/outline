@@ -208,5 +208,82 @@ Shader "Hidden/Exerussus/Outline/Mask"
             }
             ENDHLSL
         }
+
+        // Координаты развёртки поверхности без MSAA — отдельный проход в RG16F со своей глубиной. Вторая цель у
+        // MSAA-маски на встроенных GPU дорога (×4 памяти на сэмплы); координатам сглаживание не нужно.
+        Pass
+        {
+            Name "OutlineSurface"
+            ZWrite On
+            ZTest LEqual
+            Cull Off
+            Blend Off
+
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex Vert
+            #pragma fragment Frag
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+            TEXTURE2D(_BaseMap);
+            SAMPLER(sampler_BaseMap);
+            CBUFFER_START(UnityPerMaterial)
+            float4 _BaseMap_ST;
+            half4 _BaseColor;
+            float _OutlineId;
+            float _OutlineClip;
+            CBUFFER_END
+
+            float _OutlineMaskObjectSpace[64];
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+                float2 uv : TEXCOORD0;
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+                float3 positionWS : TEXCOORD0;
+                float3 normalWS : TEXCOORD1;
+                float2 uv : TEXCOORD2;
+                float3 positionOS : TEXCOORD3;
+                float3 normalOS : TEXCOORD4;
+            };
+
+            Varyings Vert(Attributes input)
+            {
+                Varyings o;
+                o.positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                o.positionCS = TransformWorldToHClip(o.positionWS);
+                o.normalWS = TransformObjectToWorldNormal(input.normalOS);
+                o.uv = TRANSFORM_TEX(input.uv, _BaseMap);
+                o.positionOS = input.positionOS.xyz;
+                o.normalOS = input.normalOS;
+                return o;
+            }
+
+            float4 Frag(Varyings input) : SV_Target
+            {
+                uint id = (uint)round(_OutlineId);
+                if (id == 0u)
+                    discard;
+                if (_OutlineClip >= 0.0)
+                {
+                    half coverage = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv).a * _BaseColor.a;
+                    clip(coverage - _OutlineClip);
+                }
+                bool objectSpace = _OutlineMaskObjectSpace[id] > 0.5;
+                float3 pos = objectSpace ? input.positionOS : input.positionWS;
+                float3 a = abs(objectSpace ? input.normalOS : input.normalWS);
+                // как в проходе маски: x → zy, y → xz, z → xy
+                float2 q = a.x >= a.y && a.x >= a.z ? pos.zy : (a.y >= a.z ? pos.xz : pos.xy);
+                return float4(q, 0.0, 0.0);
+            }
+            ENDHLSL
+        }
     }
 }
