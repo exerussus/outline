@@ -2,15 +2,14 @@
 #define EXERUSSUS_OUTLINE_UI_FILTER_INCLUDED
 
 // Фильтр подсветки UI Toolkit. Поддерево элемента растеризовано в текстуру (_MainTex); проходы фильтра идут
-// цепочкой — каждый читает выход предыдущего. Внутри силуэта (альфа > 0) хранится исходный цвет, снаружи
-// (альфа = 0) RGB свободны — туда пишется смещение до ближайшего сида (JFA): 12 + 12 бит со сдвигом 2048.
+// цепочкой — каждый читает выход предыдущего. Внутри силуэта хранится исходный цвет, снаружи — метка
+// расстояния до силуэта (точное евклидово расстояние в два разделимых прохода: по строке, затем по столбцу).
 // Координаты p — в пикселях прямоугольника фильтра; ось y идёт вниз по экрану.
 
 #include "UnityCG.cginc"
 #include "UnityUIEFilter.cginc"
 
 #define OL_TWO_PI 6.28318530718
-#define OL_EMPTY_BITS 4095.0
 #define OL_OCCUPIED 0.002
 
 Texture2D _MainTex;
@@ -19,7 +18,7 @@ SamplerState sampler_LinearRepeat;
 
 // заполняются из C# на каждый проход (OutlineUiFilter.ApplySettings)
 float4 _OlPx;        // x пикселей на пункт, y время, z источник в гамме, w выход в гамме
-float4 _OlStep;      // x шаг JFA, px
+float4 _OlStep;      // x наибольшее расстояние поля R, px
 float4 _OlOuter;     // цвет свечения (a — сила)
 float4 _OlInner;
 float4 _OlFill;
@@ -101,7 +100,9 @@ float4 OlLoad(OlRect r, float2 p)
     return _MainTex.Load(int3(t, 0));
 }
 
-bool OlOccupied(float4 v) { return v.a > OL_OCCUPIED; }
+bool OlIsMark(float4 v);
+// пиксель силуэта: исходный контент (не метка расстояния)
+bool OlOccupied(float4 v) { return v.a > OL_OCCUPIED && !OlIsMark(v); }
 
 // точные sRGB-преобразования: закодированные биты должны пережить запись/чтение в sRGB-цель
 float3 OlLinearToGamma(float3 c)
@@ -115,23 +116,27 @@ float3 OlGammaToLinear(float3 c)
     return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
 }
 
-// --- смещение до сида: 12 + 12 бит в RGB (альфа 0) ---
-float4 OlEncode(float2 offset, bool valid)
+// --- расстояние снаружи силуэта: метка в RGB (только 0 и 1 — не меняются при sRGB-преобразованиях) + значение
+// в альфе (альфа никогда не гамма-кодируется). Premultiplied-контент не может иметь канал 1 при альфе < 1,
+// поэтому метки не путаются с содержимым. DATA = (1, 0, 1, d / (R + 1)), NONE = (1, 1, 0, 0).
+float4 OlEncode(float d, bool valid)
 {
-    uint2 u = valid ? (uint2)clamp(round(offset) + 2048.0, 0.0, 4094.0) : uint2(4095u, 4095u);
-    float3 bits = float3(u.x & 255u, ((u.x >> 8) & 15u) | ((u.y & 15u) << 4), (u.y >> 4) & 255u) / 255.0;
-    if (_OlPx.w < 0.5)
-        bits = OlGammaToLinear(bits);
-    return float4(bits, 0.0);
+    if (!valid)
+        return float4(1.0, 1.0, 0.0, 0.0);
+    float r = max(_OlStep.x, 1.0) + 1.0;
+    return float4(1.0, 0.0, 1.0, clamp(d / r, 0.0, 0.996));
 }
 
-bool OlDecode(float4 v, out float2 offset)
+bool OlIsMark(float4 v) { return v.r > 0.99 && v.a < 0.9975 && (v.g < 0.01 || v.g > 0.99) && (v.b < 0.01 || v.b > 0.99) && v.g + v.b > 0.99 && v.g + v.b < 1.01; }
+
+// true — у пикселя есть расстояние (d, px); false — «до края дальше R» или не метка
+bool OlDecode(float4 v, out float d)
 {
-    float3 bits = _OlPx.z < 0.5 ? OlLinearToGamma(v.rgb) : v.rgb;
-    uint3 b = (uint3)round(saturate(bits) * 255.0);
-    uint2 u = uint2(b.r | ((b.g & 15u) << 8), (b.g >> 4) | (b.b << 4));
-    offset = float2(u) - 2048.0;
-    return !(u.x == 4095u && u.y == 4095u);
+    d = 0.0;
+    if (!OlIsMark(v) || v.g > 0.5)
+        return false;
+    d = v.a * (max(_OlStep.x, 1.0) + 1.0);
+    return true;
 }
 
 // цвет стиля (заданный в гамме) — в пространство, в котором читается источник

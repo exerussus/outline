@@ -4,19 +4,19 @@ using UnityEngine.UIElements;
 namespace Exerussus.Outline.UI.Internal
 {
     /// <summary>
-    /// Определения фильтра подсветки (по одному на число шагов JFA) и заполнение свойств проходов из стиля слота.
-    /// Проходы: сиды → шаги JFA (step = 2^(N-1) … 1, плюс ещё один шаг 1) → сборка.
+    /// Определение фильтра подсветки и заполнение свойств проходов из стиля слота.
+    /// Проходы: расстояние по строке (цель шире элемента на дальность свечения) → по столбцу → сборка.
     /// </summary>
     internal static class OutlineUiFilter
     {
         private const string ShaderResource = "OutlineUiFilter";
-        private const int PassSeed = 0;
-        private const int PassStep = 1;
+        private const int PassHorizontal = 0;
+        private const int PassVertical = 1;
         private const int PassComposite = 2;
+        // предел поля в пикселях цели (циклы шейдера); шире — свечение обрезается
+        private const float MaxFieldPx = 255f;
 
-        // корзины по дальности поля в пикселях: шагов JFA — 3 (≤8 px), 5 (≤32), 7 (≤128), 9 (≤512)
-        private static readonly int[] s_BucketSteps = { 3, 5, 7, 9 };
-        private static readonly FilterFunctionDefinition[] s_Definitions = new FilterFunctionDefinition[4];
+        private static FilterFunctionDefinition s_Definition;
         private static Material s_Material;
 
         private static readonly int IdPx = Shader.PropertyToID("_OlPx");
@@ -54,38 +54,34 @@ namespace Exerussus.Outline.UI.Internal
 
         // ------------------------------------------------------------------ Определения
 
-        public static FilterFunctionDefinition GetDefinition(int bucket)
+        public static FilterFunctionDefinition GetDefinition()
         {
-            bucket = Mathf.Clamp(bucket, 0, s_Definitions.Length - 1);
-            var def = s_Definitions[bucket];
-            if (def != null)
-                return def;
-
+            if (s_Definition != null)
+                return s_Definition;
             var material = GetMaterial();
-            int steps = s_BucketSteps[bucket];
-            def = ScriptableObject.CreateInstance<FilterFunctionDefinition>();
+            var def = ScriptableObject.CreateInstance<FilterFunctionDefinition>();
             def.hideFlags = HideFlags.HideAndDontSave;
-            def.name = $"OutlineUi JFA{steps}";
+            def.name = "OutlineUi";
             def.filterName = "outline-ui";
             def.parameters = new[]
             {
                 new FilterParameterDeclaration { name = "slot", interpolationDefaultValue = new FilterParameter(0f) },
                 new FilterParameterDeclaration { name = "reach", interpolationDefaultValue = new FilterParameter(0f) },
             };
-            var passes = new PostProcessingPass[steps + 3];
-            passes[0] = new PostProcessingPass
+            def.passes = new[]
             {
-                material = material,
-                passIndex = PassSeed,
-                applySettingsCallback = Apply,
-                // поле растёт наружу на дальность свечения — цель прохода сидов шире элемента
-                computeRequiredWriteMarginsCallback = ReachMargins,
+                new PostProcessingPass
+                {
+                    material = material,
+                    passIndex = PassHorizontal,
+                    applySettingsCallback = Apply,
+                    // поле растёт наружу на дальность свечения — цель первого прохода шире элемента
+                    computeRequiredWriteMarginsCallback = ReachMargins,
+                },
+                new PostProcessingPass { material = material, passIndex = PassVertical, applySettingsCallback = Apply },
+                new PostProcessingPass { material = material, passIndex = PassComposite, applySettingsCallback = Apply },
             };
-            for (int i = 1; i <= steps + 1; i++)
-                passes[i] = new PostProcessingPass { material = material, passIndex = PassStep, applySettingsCallback = Apply };
-            passes[steps + 2] = new PostProcessingPass { material = material, passIndex = PassComposite, applySettingsCallback = Apply };
-            def.passes = passes;
-            s_Definitions[bucket] = def;
+            s_Definition = def;
             return def;
         }
 
@@ -126,18 +122,6 @@ namespace Exerussus.Outline.UI.Internal
             return Mathf.Max(outer, 0f);
         }
 
-        /// <summary>Набор шагов JFA под дальность (пункты → пиксели по масштабу панели элемента).</summary>
-        public static int BucketFor(float reachPoints, VisualElement element)
-        {
-            float ppp = element != null && element.panel != null ? Mathf.Max(element.scaledPixelsPerPoint, 1f) : 2f;
-            // + внутренний запас: элемент может оказаться на панели с большим масштабом позже
-            float px = reachPoints * ppp * 1.25f;
-            for (int b = 0; b < s_BucketSteps.Length; b++)
-                if (px <= (1 << s_BucketSteps[b]))
-                    return b;
-            return s_BucketSteps.Length - 1;
-        }
-
         public static bool IsAnimated(OutlineStyle s)
         {
             if (s == null)
@@ -155,14 +139,6 @@ namespace Exerussus.Outline.UI.Internal
 
         // ------------------------------------------------------------------ Свойства прохода
 
-        private static int StepsOf(FilterFunctionDefinition def)
-        {
-            for (int b = 0; b < s_Definitions.Length; b++)
-                if (ReferenceEquals(s_Definitions[b], def))
-                    return s_BucketSteps[b];
-            return s_BucketSteps[s_BucketSteps.Length - 1];
-        }
-
         private static void Apply(MaterialPropertyBlock mpb, FilterPassContext ctx)
         {
             var func = ctx.filterFunction;
@@ -171,17 +147,11 @@ namespace Exerussus.Outline.UI.Internal
             float now = OutlineClock.Now;
             mpb.SetVector(IdPx, new Vector4(ppp, now % 3600f, ctx.readsGamma ? 1f : 0f, ctx.writesGamma ? 1f : 0f));
 
-            int steps = StepsOf(func.customDefinition);
-            int pass = ctx.filterPassIndex;
-            if (pass == 0)
+            // R — наибольшее расстояние поля, px: дальность свечения стиля в пикселях цели
+            float reach = func.parameterCount > 1 ? func.GetParameter(1).floatValue : 0f;
+            mpb.SetVector(IdStep, new Vector4(Mathf.Min(Mathf.Ceil(reach * ppp), MaxFieldPx), 0f, 0f, 0f));
+            if (ctx.filterPassIndex < PassComposite)
                 return;
-            if (pass <= steps + 1)
-            {
-                int k = pass; // 1..steps — шаги 2^(steps-k), последний — ещё один шаг 1
-                float step = k <= steps ? (1 << (steps - k)) : 1f;
-                mpb.SetVector(IdStep, new Vector4(step, 0f, 0f, 0f));
-                return;
-            }
 
             // сборка: параметры стиля слота (с плавной сменой стиля, fade и растворением эффекта)
             if (!OutlineUi.IsSlotAlive(slot))

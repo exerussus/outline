@@ -64,6 +64,9 @@ namespace Exerussus.Outline.UI
             OutlineUi.SetDissolve(h, 0f, 1f, duration);
             element.schedule.Execute(() =>
             {
+                // эффект сняли раньше (Restore, HideAll) — элемент не трогаем
+                if (!h.IsAlive)
+                    return;
                 element.style.visibility = Visibility.Hidden;
                 s_Dissolved.Add(element);
                 h.Hide();
