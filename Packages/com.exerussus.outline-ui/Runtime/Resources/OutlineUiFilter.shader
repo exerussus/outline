@@ -1,6 +1,6 @@
 // Проходы фильтра подсветки UI Toolkit (FilterFunctionDefinition собирается в OutlineUiFilter.cs):
-// 0 — расстояние по строке, 1 — по столбцу (точное евклидово расстояние до силуэта, не дальше R = _OlStep.x;
-// внутри силуэта — исходный цвет); 2 — сборка: исходный контент + заливка/внутренний контур/паттерны/сканер/растворение внутри,
+// 0 — расстояние по строке до силуэта (внутри силуэта — исходный цвет); 1 — сборка: сначала расстояние по
+// столбцу (точное евклидово, не дальше R = _OlStep.x), затем исходный контент + заливка/внутренний контур/паттерны/сканер/растворение внутри,
 // свечение с эффектами снаружи. Выход premultiplied, как и вход.
 Shader "Hidden/Exerussus/OutlineUi/Filter"
 {
@@ -49,22 +49,18 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
 
         Pass
         {
-            Name "Vertical"
+            Name "Composite"
             HLSLPROGRAM
             #pragma target 3.5
             #pragma vertex OlVert
             #pragma fragment Frag
             #include "OutlineUiFilter.hlsl"
 
-            // евклидово расстояние: минимум по столбцу из sqrt(dx² + dy²), dx — из прохода по строкам
-            float4 Frag(OlVaryings i) : SV_Target
+            // евклидово расстояние до силуэта: минимум по столбцу из sqrt(dx² + dy²), dx — из прохода по строкам.
+            // false — дальше R (или поле не считалось: стиль без свечения)
+            bool VerticalDistance(OlRect r, float2 p, float4 v, out float best)
             {
-                OlRect r = OlMakeRect(i, false);
-                float2 p = OlPixel(i, r);
-                float4 v = OlLoad(r, p);
-                if (OlOccupied(v))
-                    return v;
-                float best = 1e5;
+                best = 1e5;
                 float dx;
                 if (OlDecode(v, dx))
                     best = dx;
@@ -84,19 +80,8 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
                             best = min(best, sqrt(dx * dx + s * s));
                     }
                 }
-                return OlEncode(best, best <= _OlStep.x);
+                return best <= _OlStep.x;
             }
-            ENDHLSL
-        }
-
-        Pass
-        {
-            Name "Composite"
-            HLSLPROGRAM
-            #pragma target 3.5
-            #pragma vertex OlVert
-            #pragma fragment Frag
-            #include "OutlineUiFilter.hlsl"
 
             float AngleAround(float2 p, float2 center)
             {
@@ -285,9 +270,10 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
                 }
                 else
                 {
-                    // расстояние до края уже с поправкой на покрытие граничного пикселя (проходы поля)
+                    // вертикальный проход поля прямо здесь: минимум по столбцу из √(dx² + dy²), dx — из прохода
+                    // по строке (с поправкой на покрытие граничного пикселя)
                     float d;
-                    if (!OlDecode(v, d))
+                    if (!VerticalDistance(r, p, v, d))
                         return 0;
                     result = Effects(OuterLayer(max(d, 0.0), p, center, time), p, time);
                     v = 0; // для растворения: снаружи контента нет

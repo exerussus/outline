@@ -466,7 +466,7 @@ namespace Exerussus.Outline.Lab
                 _log.Append("[U").Append(i.ToString("000", inv)).Append("] ").Append(it.Name.PadRight(30)).Append(" | ")
                     .Append(it.Avg.ToString("0.00", inv)).Append('/').Append(it.P95.ToString("0.00", inv));
                 if (!it.IsBase && b > 0f)
-                    _log.Append(" | +").Append((it.Avg - b).ToString("0.00", inv));
+                    _log.Append(" | ").Append((it.Avg - b).ToString("+0.00;-0.00", inv));
                 else
                     _log.Append(" | —");
                 _log.Append(" | n=").Append(it.Samples).Append('\n');
@@ -488,7 +488,7 @@ namespace Exerussus.Outline.Lab
                     {
                         if (x.Tier == t && x.Name == it.Name && !x.Motion && x.Samples > 0 && b > 0f)
                         {
-                            cell = "+" + (x.Avg - b).ToString("0.00", inv);
+                            cell = (x.Avg - b).ToString("+0.00;-0.00", inv);
                             break;
                         }
                     }
