@@ -47,6 +47,7 @@ namespace Exerussus.Outline.Lab
             public Action<float> Tick;              // каждый кадр замера, время с начала пункта
             public bool Motion;
             public bool Diag;                       // разложение — вне сводки
+            public OutlineUiDebugView DebugView;    // отладочный вид фильтра на время пункта
             public bool IsBase => Style == null && Begin == null;
             public float Avg;
             public float P95;
@@ -300,6 +301,10 @@ namespace Exerussus.Outline.Lab
             inner.innerColor = new Color(1f, 0.78f, 0.25f, 1f);
             inner.innerWidth = 4f;
             _items.Add(new Item { Tier = tier, Name = "разложение: только внутренний", Style = inner, Diag = true });
+            if (tier != 0)
+                return;
+            // отладка внутреннего контура: что видит сборка внутри силуэта
+            _items.Add(new Item { Tier = tier, Name = "отладка: расстояние внутрь", Style = inner, Diag = true, DebugView = OutlineUiDebugView.InsideDistance });
         }
 
         private OutlineUiStyle TempStyle(string name)
@@ -318,6 +323,7 @@ namespace Exerussus.Outline.Lab
             var elements = _tierElements[item.Tier];
             ResetElements(elements);
             _handles.Clear();
+            OutlineUi.DebugView = item.DebugView;
             if (item.Style != null)
             {
                 foreach (var e in elements)
@@ -368,6 +374,7 @@ namespace Exerussus.Outline.Lab
             foreach (var h in _handles)
                 h.Hide();
             _handles.Clear();
+            OutlineUi.DebugView = OutlineUiDebugView.None;
             ResetElements(elements);
             GC.Collect();
         }

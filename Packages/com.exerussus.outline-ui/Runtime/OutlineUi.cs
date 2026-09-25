@@ -18,6 +18,9 @@ namespace Exerussus.Outline.UI
         public const int SlotCount = 128;
         public const int MaxEntries = SlotCount - 1;
 
+        /// <summary>Отладочный вид всех подсветок (перерисовка — со следующего кадра подсветки).</summary>
+        public static OutlineUiDebugView DebugView { get; set; }
+
         // --- SoA-буферы слотов ---
         private static readonly bool[] s_Alive = new bool[SlotCount];
         private static readonly int[] s_Version = new int[SlotCount];
