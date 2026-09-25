@@ -18,6 +18,7 @@ SamplerState sampler_LinearRepeat;
 
 // заполняются из C# на каждый проход (OutlineUiFilter.ApplySettings)
 float4 _OlPx;        // x пикселей на пункт, y время, z источник в гамме, w выход в гамме
+float4 _OlDebug;     // x отладочный вид (OutlineUiDebugView)
 float4 _OlStep;      // x наибольшее расстояние поля R, px
 float4 _OlOuter;     // цвет свечения (a — сила)
 float4 _OlInner;

@@ -172,40 +172,38 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
                 return res;
             }
 
-            // направление k из 8 (оси, затем диагонали). Без локального static const массива: компилятор D3D11
-            // обнулял его, и край внутрь не находился никогда
-            float2 InsideDir(int k)
+            // пуст ли пиксель источника (вне силуэта)
+            float OlEmptyAt(OlRect r, float2 p)
             {
-                float2 axis = float2((k & 1) ? -1.0 : 1.0, 0.0);
-                if (k >= 2 && k < 4)
-                    axis = float2(0.0, (k & 1) ? -1.0 : 1.0);
-                if (k >= 4)
-                    axis = float2((k & 1) ? -0.7071 : 0.7071, k >= 6 ? -0.7071 : 0.7071);
-                return axis;
+                return OlOccupied(OlLoad(r, p)) ? 0.0 : 1.0;
             }
 
-            // расстояние внутрь до края (px): поиск прозрачного пикселя по 8 направлениям, не дальше maxDist
+            // расстояние внутрь до края (px): ближайший прозрачный пиксель по 8 направлениям, не дальше maxDist.
+            // Плоский цикл, 8 проб на шаг: вариант с return из вложенного цикла на D3D11 не находил край никогда
             float InsideDistance(OlRect r, float2 p, float maxDist)
             {
                 int steps = (int)ceil(maxDist);
-                // дальше maxDist края нет — внутренний контур здесь не виден
-                bool any0 = false;
-                [unroll]
-                for (int k = 0; k < 8; k++)
-                    any0 = any0 || !OlOccupied(OlLoad(r, p + InsideDir(k) * steps));
-                if (!any0)
-                    return 1e5;
+                float best = 1e5;
                 [loop]
                 for (int s = 1; s <= steps; s++)
                 {
-                    [unroll]
-                    for (int k = 0; k < 8; k++)
+                    float fs = (float)s;
+                    float fd = fs * 0.7071;
+                    float e = OlEmptyAt(r, p + float2(fs, 0.0));
+                    e = max(e, OlEmptyAt(r, p - float2(fs, 0.0)));
+                    e = max(e, OlEmptyAt(r, p + float2(0.0, fs)));
+                    e = max(e, OlEmptyAt(r, p - float2(0.0, fs)));
+                    e = max(e, OlEmptyAt(r, p + float2(fd, fd)));
+                    e = max(e, OlEmptyAt(r, p + float2(-fd, fd)));
+                    e = max(e, OlEmptyAt(r, p + float2(fd, -fd)));
+                    e = max(e, OlEmptyAt(r, p - float2(fd, fd)));
+                    if (e > 0.5)
                     {
-                        if (!OlOccupied(OlLoad(r, p + InsideDir(k) * s)))
-                            return s - 0.5;
+                        best = fs - 0.5;
+                        break; // break (как в VerticalDistance) работает; ломался только return из вложенного цикла
                     }
                 }
-                return 1e5;
+                return best;
             }
 
             // слои внутри силуэта (premultiplied)
@@ -269,6 +267,10 @@ Shader "Hidden/Exerussus/OutlineUi/Filter"
 
                 if (OlOccupied(v))
                 {
+                    if (_OlDebug.x > 1.5)
+                        return float4(OlEmptyAt(r, p - float2(1, 0)), OlEmptyAt(r, p + float2(1, 0)), OlEmptyAt(r, p - float2(0, 1)), 1.0);
+                    if (_OlDebug.x > 0.5)
+                        return float4(saturate(InsideDistance(r, p, 8.0) / 8.0), saturate(_OlWidths.y / 8.0), saturate(_OlInner.a), 1.0);
                     // внутри: исходный контент, поверх — слои подсветки; у частично покрытого края — свечение под ним
                     float4 layers = Effects(InsideLayers(r, p, center, time), p, time);
                     result = float4(layers.rgb + v.rgb * (1.0 - layers.a), layers.a + v.a * (1.0 - layers.a));

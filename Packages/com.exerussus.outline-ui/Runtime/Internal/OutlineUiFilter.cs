@@ -22,6 +22,7 @@ namespace Exerussus.Outline.UI.Internal
 
         private static readonly int IdPx = Shader.PropertyToID("_OlPx");
         private static readonly int IdStep = Shader.PropertyToID("_OlStep");
+        private static readonly int IdDebug = Shader.PropertyToID("_OlDebug");
         private static readonly int IdOuter = Shader.PropertyToID("_OlOuter");
         private static readonly int IdInner = Shader.PropertyToID("_OlInner");
         private static readonly int IdFill = Shader.PropertyToID("_OlFill");
@@ -161,6 +162,7 @@ namespace Exerussus.Outline.UI.Internal
             mpb.SetVector(IdStep, new Vector4(Mathf.Min(Mathf.Ceil(reach * ppp), MaxFieldPx), 0f, 0f, 0f));
             if (ctx.postProcessingPass.passIndex != PassComposite)
                 return;
+            mpb.SetVector(IdDebug, new Vector4((float)OutlineUi.DebugView, 0f, 0f, 0f));
 
             // сборка: параметры стиля слота (с плавной сменой стиля, fade и растворением эффекта)
             if (!OutlineUi.IsSlotAlive(slot))
