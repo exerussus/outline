@@ -22,6 +22,7 @@ h.FadeOutAndHide(0.2f);
 // временные эффекты
 OutlineUiFx.Pulse(icon);
 OutlineUiFx.Flash(card, new Color(2f, 2f, 2f, 0.8f));
+OutlineUiFx.Flash(card, successStyle);   // вспышка готовым стилем, без временного ассета
 OutlineUiFx.DissolveOut(panel, 0.8f, onComplete: () => Debug.Log("растворён"));
 OutlineUiFx.DissolveIn(panel);
 ```
@@ -34,6 +35,14 @@ OutlineUiFx.DissolveIn(panel);
 </Exerussus.Outline.UI.OutlineUiTarget>
 ```
 
+Состояния без кода: стиль выбирается от сильного к слабому — нажат (`pressed-style`) → под указателем (`hover-style`) → выбран (`selected-style` + `selected`) → базовый (`outline-style`, пока `highlighted`). Пустой стиль состояния пропускается.
+
+```xml
+<Exerussus.Outline.UI.OutlineUiTarget hover-style="…/Style_Hover.asset" selected-style="…/Style_Selected.asset" priority="5">
+    <Game.UI.TileButton />
+</Exerussus.Outline.UI.OutlineUiTarget>
+```
+
 ### OutlineUi
 
 | Метод | Что делает |
@@ -42,6 +51,12 @@ OutlineUiFx.DissolveIn(panel);
 | `SetStyle(h, style, duration)` | Сменить стиль сразу или плавно: цвета, ширины, кривые, градиенты и эффекты смешиваются, тип паттерна переключается на середине. |
 | `SetFade`, `FadeTo`, `FadeOutAndHide`, `Hide` | Непрозрачность и снятие. |
 | `HideAll(element)`, `HideAll()` | Снять подсветки элемента / все. |
+| `SetFrozen(h, bool)`, `SetFrozenWithin(root, bool)` | Заморозить анимацию: облик как в момент заморозки, своё время слота стоит; разморозка продолжает с того же места. |
+| `SetSuspended(h, bool)`, `SetSuspendedWithin(root, bool)` | Пауза: фильтр снят с элемента (затрат нет), хэндл и состояние живы; возобновление возвращает фильтр. |
+
+Уровни детализации монитора удобно вешать на `…Within(root)`: «виден, но не в фокусе» — заморозка, «далеко» — пауза. `FadeOutAndHide` у замороженной или приостановленной подсветки снимает её сразу.
+
+При переполнении слотов (127) новая подсветка вытесняет самую неважную с приоритетом ниже: `OutlineUi.Show(e, style, OutlineUiOptions.FadeIn(0.15f).WithPriority(10))`. Нет таких — предупреждение и `Invalid`.
 
 Свои фильтры элемента (`style.filter`, заданные в коде) сохраняются: подсветки добавляются после них и снимаются, возвращая исходный список.
 

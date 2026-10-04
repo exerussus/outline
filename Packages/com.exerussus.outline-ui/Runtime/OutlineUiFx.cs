@@ -53,6 +53,23 @@ namespace Exerussus.Outline.UI
             return h;
         }
 
+        /// <summary>
+        /// Вспышка готовым стилем (ассет «успех», «ошибка»…): появляется сразу и гаснет за duration.
+        /// В отличие от варианта с цветом, временный стиль не создаётся.
+        /// </summary>
+        public static OutlineUiHandle Flash(VisualElement element, OutlineUiStyle style, float duration = 0.35f,
+            Action onComplete = null)
+        {
+            if (element == null || style == null)
+                return OutlineUiHandle.Invalid;
+            duration = Mathf.Max(0.02f, duration);
+            var h = OutlineUi.Show(element, style);
+            h.FadeOutAndHide(duration);
+            if (onComplete != null)
+                element.schedule.Execute(onComplete).StartingIn(Ms(duration));
+            return h;
+        }
+
         /// <summary>Растворить элемент: шумовой порог съедает содержимое с горящей кромкой, после — элемент скрыт.</summary>
         public static OutlineUiHandle DissolveOut(VisualElement element, float duration = 0.8f, OutlineUiStyle style = null,
             Action onComplete = null)

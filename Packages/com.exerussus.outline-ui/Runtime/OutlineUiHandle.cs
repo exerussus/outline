@@ -28,6 +28,10 @@ namespace Exerussus.Outline.UI
         public void FadeTo(float target, float duration) => OutlineUi.FadeTo(this, target, duration);
         public void FadeOutAndHide(float duration) => OutlineUi.FadeOutAndHide(this, duration);
         public void Hide() => OutlineUi.Hide(this);
+        public void SetFrozen(bool frozen) => OutlineUi.SetFrozen(this, frozen);
+        public void SetSuspended(bool suspended) => OutlineUi.SetSuspended(this, suspended);
+        public bool IsFrozen => OutlineUi.IsFrozen(this);
+        public bool IsSuspended => OutlineUi.IsSuspended(this);
 
         public bool Equals(OutlineUiHandle other) => Slot == other.Slot && Version == other.Version;
         public override bool Equals(object obj) => obj is OutlineUiHandle other && Equals(other);
