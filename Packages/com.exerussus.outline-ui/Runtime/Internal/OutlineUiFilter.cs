@@ -154,7 +154,8 @@ namespace Exerussus.Outline.UI.Internal
             var func = ctx.filterFunction;
             int slot = func.parameterCount > 0 ? Mathf.RoundToInt(func.GetParameter(0).floatValue) : 0;
             float ppp = Mathf.Max(ctx.scaledPixelsPerPoint, 1e-3f);
-            float now = OutlineClock.Now;
+            // время слота: у замороженной подсветки стоит вместе с анимацией шейдера
+            float now = OutlineUi.SlotNow(slot);
             mpb.SetVector(IdPx, new Vector4(ppp, now % 3600f, ctx.readsGamma ? 1f : 0f, ctx.writesGamma ? 1f : 0f));
 
             // R — наибольшее расстояние поля, px: дальность свечения стиля в пикселях цели
