@@ -39,6 +39,12 @@ namespace Exerussus.Outline.UI
         private static readonly float[] s_DisTo = new float[SlotCount];
         private static readonly float[] s_DisStart = new float[SlotCount];
         private static readonly float[] s_DisDuration = new float[SlotCount];
+        // время слота: своё, чтобы подсветку можно было заморозить и продолжить с того же места
+        private static readonly float[] s_TimeOffset = new float[SlotCount];
+        private static readonly float[] s_FrozenAt = new float[SlotCount]; // < 0 — время идёт
+        private static readonly bool[] s_Frozen = new bool[SlotCount];
+        private static readonly bool[] s_Suspended = new bool[SlotCount];
+        private static readonly int[] s_Priority = new int[SlotCount];
         private static readonly FilterFunction[] s_Filter = new FilterFunction[SlotCount];
         private static readonly IVisualElementScheduledItem[] s_Ticker = new IVisualElementScheduledItem[SlotCount];
         private static readonly Action[] s_TickAction = CreateTickActions();
@@ -61,12 +67,20 @@ namespace Exerussus.Outline.UI
                 return OutlineUiHandle.Invalid;
             int slot = FindFreeSlot();
             if (slot < 0)
+                slot = EvictForPriority(options.priority);
+            if (slot < 0)
             {
-                Debug.LogWarning($"[OutlineUi] Превышен лимит одновременных подсветок ({MaxEntries}).");
+                Debug.LogWarning($"[OutlineUi] Превышен лимит одновременных подсветок ({MaxEntries}), " +
+                                 $"и нет подсветки с приоритетом ниже {options.priority}.");
                 return OutlineUiHandle.Invalid;
             }
 
-            float now = OutlineClock.Now;
+            s_TimeOffset[slot] = 0f;
+            s_FrozenAt[slot] = -1f;
+            s_Frozen[slot] = false;
+            s_Suspended[slot] = false;
+            s_Priority[slot] = options.priority;
+            float now = SlotNow(slot);
             s_Alive[slot] = true;
             s_Element[slot] = element;
             s_Style[slot] = style;
@@ -110,7 +124,7 @@ namespace Exerussus.Outline.UI
             var current = s_Style[s];
             if (ReferenceEquals(current, style))
                 return;
-            float now = OutlineClock.Now;
+            float now = SlotNow(s);
             if (duration > 0f)
             {
                 var prev = s_PrevStyle[s];
@@ -146,7 +160,7 @@ namespace Exerussus.Outline.UI
             if (!IsAlive(h))
                 return;
             int s = h.Slot;
-            float now = OutlineClock.Now;
+            float now = SlotNow(s);
             s_FadeFrom[s] = EvaluateFade(s, now);
             s_FadeTo[s] = Mathf.Clamp01(target);
             s_FadeStart[s] = now;
@@ -158,13 +172,14 @@ namespace Exerussus.Outline.UI
         {
             if (!IsAlive(h))
                 return;
-            if (duration <= 0f)
+            // у замороженной или приостановленной время стоит — затухание не дошло бы до конца
+            if (duration <= 0f || s_FrozenAt[h.Slot] >= 0f)
             {
                 Hide(h);
                 return;
             }
             FadeTo(h, 0f, duration);
-            s_HideAt[h.Slot] = OutlineClock.Now + duration;
+            s_HideAt[h.Slot] = SlotNow(h.Slot) + duration;
         }
 
         public static void Hide(in OutlineUiHandle h)
@@ -191,7 +206,72 @@ namespace Exerussus.Outline.UI
                     Release(s);
         }
 
+        // ------------------------------------------------------------------ Заморозка и пауза
+
+        /// <summary>
+        /// Заморозить анимацию подсветки: облик остаётся как в момент заморозки, время слота стоит
+        /// (пульс, бег по контуру, fade, плавная смена стиля, отложенное снятие). Разморозка продолжает
+        /// с того же места. Для режима «монитор виден, но не в фокусе».
+        /// </summary>
+        public static void SetFrozen(in OutlineUiHandle h, bool frozen)
+        {
+            if (!IsAlive(h))
+                return;
+            s_Frozen[h.Slot] = frozen;
+            ApplyClock(h.Slot);
+            s_Element[h.Slot].MarkDirtyRepaint();
+        }
+
+        public static bool IsFrozen(in OutlineUiHandle h) => IsAlive(h) && s_Frozen[h.Slot];
+
+        /// <summary>
+        /// Приостановить подсветку: фильтр снимается с элемента (ноль затрат на отрисовку), хэндл живёт,
+        /// время слота стоит. Возобновление возвращает фильтр в прежнем состоянии. Для режима «монитор далеко».
+        /// </summary>
+        public static void SetSuspended(in OutlineUiHandle h, bool suspended)
+        {
+            if (!IsAlive(h))
+                return;
+            SetSuspendedSlot(h.Slot, suspended);
+        }
+
+        public static bool IsSuspended(in OutlineUiHandle h) => IsAlive(h) && s_Suspended[h.Slot];
+
+        /// <summary>Заморозить или разморозить все подсветки элемента root и его потомков.</summary>
+        public static void SetFrozenWithin(VisualElement root, bool frozen)
+        {
+            if (root == null)
+                return;
+            for (int s = 1; s < SlotCount; s++)
+            {
+                if (!s_Alive[s] || !IsWithin(root, s_Element[s]))
+                    continue;
+                s_Frozen[s] = frozen;
+                ApplyClock(s);
+                s_Element[s].MarkDirtyRepaint();
+            }
+        }
+
+        /// <summary>Приостановить или возобновить все подсветки элемента root и его потомков.</summary>
+        public static void SetSuspendedWithin(VisualElement root, bool suspended)
+        {
+            if (root == null)
+                return;
+            for (int s = 1; s < SlotCount; s++)
+                if (s_Alive[s] && IsWithin(root, s_Element[s]))
+                    SetSuspendedSlot(s, suspended);
+        }
+
         // ------------------------------------------------------------------ Для фильтра и эффектов
+
+        /// <summary>Время слота: глобальные часы минус накопленные паузы; у замороженного — момент заморозки.</summary>
+        internal static float SlotNow(int slot)
+        {
+            if (slot <= 0 || slot >= SlotCount)
+                return OutlineClock.Now;
+            float f = s_FrozenAt[slot];
+            return f >= 0f ? f : OutlineClock.Now - s_TimeOffset[slot];
+        }
 
         internal static bool IsSlotAlive(int slot) => slot > 0 && slot < SlotCount && s_Alive[slot];
         internal static OutlineUiStyle GetStyle(int slot) => s_Style[slot];
@@ -229,7 +309,7 @@ namespace Exerussus.Outline.UI
             int s = h.Slot;
             s_DisFrom[s] = Mathf.Clamp01(from);
             s_DisTo[s] = Mathf.Clamp01(to);
-            s_DisStart[s] = OutlineClock.Now;
+            s_DisStart[s] = SlotNow(s);
             s_DisDuration[s] = Mathf.Max(0f, duration);
         }
 
@@ -270,7 +350,13 @@ namespace Exerussus.Outline.UI
                 s_Ticker[slot]?.Pause();
                 return;
             }
-            float now = OutlineClock.Now;
+            if (s_FrozenAt[slot] >= 0f)
+            {
+                // время стоит — перерисовывать нечего; тикер вернёт ApplyClock при разморозке
+                s_Ticker[slot]?.Pause();
+                return;
+            }
+            float now = SlotNow(slot);
             if (s_HideAt[slot] >= 0f && now >= s_HideAt[slot])
             {
                 Release(slot);
@@ -304,7 +390,7 @@ namespace Exerussus.Outline.UI
                 return;
             bool any = false;
             for (int s = 1; s < SlotCount && !any; s++)
-                any = s_Alive[s] && ReferenceEquals(s_Element[s], e);
+                any = s_Alive[s] && !s_Suspended[s] && ReferenceEquals(s_Element[s], e);
 
             if (!s_BaseFilters.TryGetValue(e, out var baseList))
             {
@@ -327,7 +413,7 @@ namespace Exerussus.Outline.UI
 
             var list = new List<FilterFunction>(baseList);
             for (int s = 1; s < SlotCount; s++)
-                if (s_Alive[s] && ReferenceEquals(s_Element[s], e))
+                if (s_Alive[s] && !s_Suspended[s] && ReferenceEquals(s_Element[s], e))
                     list.Add(s_Filter[s]);
             e.style.filter = new StyleList<FilterFunction>(list);
         }
@@ -340,6 +426,57 @@ namespace Exerussus.Outline.UI
             return -1;
         }
 
+        // Слот самой неважной подсветки с приоритетом ниже нужного — освобождается под новую
+        private static int EvictForPriority(int priority)
+        {
+            int victim = -1;
+            int lowest = priority;
+            for (int s = 1; s < SlotCount; s++)
+            {
+                if (s_Alive[s] && s_Priority[s] < lowest)
+                {
+                    lowest = s_Priority[s];
+                    victim = s;
+                }
+            }
+            if (victim > 0)
+                Release(victim);
+            return victim;
+        }
+
+        private static bool IsWithin(VisualElement root, VisualElement e) =>
+            e != null && (ReferenceEquals(root, e) || root.Contains(e));
+
+        // Заморозка: явная (SetFrozen) или от паузы (SetSuspended)
+        private static void ApplyClock(int s)
+        {
+            bool want = s_Frozen[s] || s_Suspended[s];
+            bool isFrozen = s_FrozenAt[s] >= 0f;
+            if (want == isFrozen)
+                return;
+            float clock = OutlineClock.Now;
+            if (want)
+            {
+                s_FrozenAt[s] = clock - s_TimeOffset[s];
+            }
+            else
+            {
+                s_TimeOffset[s] = clock - s_FrozenAt[s];
+                s_FrozenAt[s] = -1f;
+                s_Ticker[s]?.Resume();
+            }
+        }
+
+        private static void SetSuspendedSlot(int s, bool suspended)
+        {
+            if (s_Suspended[s] == suspended)
+                return;
+            s_Suspended[s] = suspended;
+            ApplyClock(s);
+            RebuildFilters(s_Element[s]);
+            s_Element[s]?.MarkDirtyRepaint();
+        }
+
         private static void Release(int slot)
         {
             var e = s_Element[slot];
@@ -348,6 +485,10 @@ namespace Exerussus.Outline.UI
             s_Style[slot] = null;
             s_PrevStyle[slot] = null;
             s_Filter[slot] = default;
+            s_Frozen[slot] = false;
+            s_Suspended[slot] = false;
+            s_FrozenAt[slot] = -1f;
+            s_Priority[slot] = 0;
             s_AliveCount--;
             s_Ticker[slot]?.Pause();
             RebuildFilters(e);
@@ -367,6 +508,11 @@ namespace Exerussus.Outline.UI
                 s_Element[s] = null;
                 s_Ticker[s] = null;
                 s_TickerOwner[s] = null;
+                s_Frozen[s] = false;
+                s_Suspended[s] = false;
+                s_FrozenAt[s] = -1f;
+                s_TimeOffset[s] = 0f;
+                s_Priority[s] = 0;
             }
             s_BaseFilters.Clear();
             s_AliveCount = 0;

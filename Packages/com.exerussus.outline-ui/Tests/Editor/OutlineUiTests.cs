@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using UnityEngine.UIElements;
 
 namespace Exerussus.Outline.UI.Tests
@@ -76,6 +77,105 @@ namespace Exerussus.Outline.UI.Tests
             Assert.IsTrue(h.IsAlive);
             Assert.AreSame(other, OutlineUi.GetStyle(h.Slot));
             Assert.AreEqual(1, FilterCount(e));
+        }
+
+        [Test]
+        public void Suspend_RemovesFilter_Resume_RestoresIt()
+        {
+            var e = new VisualElement();
+            var h = OutlineUi.Show(e, _style);
+            h.SetSuspended(true);
+            Assert.IsTrue(h.IsAlive);
+            Assert.IsTrue(h.IsSuspended);
+            Assert.AreEqual(0, FilterCount(e));
+            h.SetSuspended(false);
+            Assert.IsFalse(h.IsSuspended);
+            Assert.AreEqual(1, FilterCount(e));
+        }
+
+        [Test]
+        public void SuspendWithin_TouchesOnlyDescendants()
+        {
+            var root = new VisualElement();
+            var child = new VisualElement();
+            var outside = new VisualElement();
+            root.Add(child);
+            var hChild = OutlineUi.Show(child, _style);
+            var hOutside = OutlineUi.Show(outside, _style);
+            OutlineUi.SetSuspendedWithin(root, true);
+            Assert.IsTrue(hChild.IsSuspended);
+            Assert.IsFalse(hOutside.IsSuspended);
+            Assert.AreEqual(0, FilterCount(child));
+            Assert.AreEqual(1, FilterCount(outside));
+        }
+
+        [Test]
+        public void Freeze_KeepsFilter_AndStopsSlotTime()
+        {
+            var e = new VisualElement();
+            var h = OutlineUi.Show(e, _style);
+            h.SetFrozen(true);
+            Assert.IsTrue(h.IsFrozen);
+            Assert.AreEqual(1, FilterCount(e));
+            float t0 = OutlineUi.SlotNow(h.Slot);
+            System.Threading.Thread.Sleep(20);
+            Assert.AreEqual(t0, OutlineUi.SlotNow(h.Slot));
+            h.SetFrozen(false);
+            Assert.IsFalse(h.IsFrozen);
+        }
+
+        [Test]
+        public void FadeOutAndHide_WhenFrozen_HidesAtOnce()
+        {
+            var e = new VisualElement();
+            var h = OutlineUi.Show(e, _style);
+            h.SetFrozen(true);
+            h.FadeOutAndHide(1f);
+            Assert.IsFalse(h.IsAlive);
+            Assert.AreEqual(0, FilterCount(e));
+        }
+
+        [Test]
+        public void Overflow_EvictsLowerPriority_ElseInvalid()
+        {
+            var e = new VisualElement();
+            for (int i = 0; i < OutlineUi.MaxEntries; i++)
+                OutlineUi.Show(e, _style, OutlineUiOptions.Priority(0));
+            Assert.AreEqual(OutlineUi.MaxEntries, OutlineUi.AliveCount);
+
+            var important = OutlineUi.Show(new VisualElement(), _style, OutlineUiOptions.Priority(5));
+            Assert.IsTrue(important.IsAlive);
+            Assert.AreEqual(OutlineUi.MaxEntries, OutlineUi.AliveCount);
+
+            LogAssert.ignoreFailingMessages = true;
+            var same = OutlineUi.Show(new VisualElement(), _style, OutlineUiOptions.Priority(0));
+            LogAssert.ignoreFailingMessages = false;
+            Assert.IsFalse(same.IsAlive);
+        }
+
+        [Test]
+        public void Flash_WithStyle_UsesGivenStyle()
+        {
+            var e = new VisualElement();
+            var h = OutlineUiFx.Flash(e, _style, 0.3f);
+            Assert.IsTrue(h.IsAlive);
+            Assert.AreSame(_style, OutlineUi.GetStyle(h.Slot));
+        }
+
+        [Test]
+        public void Target_PicksStyleByState()
+        {
+            var hover = ScriptableObject.CreateInstance<OutlineUiStyle>();
+            var selected = ScriptableObject.CreateInstance<OutlineUiStyle>();
+            _objects.Add(hover);
+            _objects.Add(selected);
+            var t = new OutlineUiTarget { outlineStyle = _style, hoverStyle = hover, selectedStyle = selected };
+            Assert.AreSame(_style, t.CurrentStyle);
+            t.selected = true;
+            Assert.AreSame(selected, t.CurrentStyle);
+            t.highlighted = false;
+            t.selected = false;
+            Assert.IsNull(t.CurrentStyle);
         }
 
         [Test]
